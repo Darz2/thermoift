@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: thermoift
+Version: 0.2.0
+Summary: Thermodynamics and Interfacial Tension tools for N-component mixtures using PC-SAFT via feos
+Requires-Dist: feos>=0.9.3
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: matplotlib
+Requires-Dist: scipy
+Requires-Dist: molmass==2026.1.8
+Requires-Dist: si-units==0.11.1
+Requires-Dist: sympy==1.14.0
+Requires-Dist: ctREFPROP==0.10.5

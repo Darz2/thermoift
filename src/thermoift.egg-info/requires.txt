@@ -1,0 +1,9 @@
+feos>=0.9.3
+numpy
+pandas
+matplotlib
+scipy
+molmass==2026.1.8
+si-units==0.11.1
+sympy==1.14.0
+ctREFPROP==0.10.5

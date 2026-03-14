@@ -1,0 +1,15 @@
+pyproject.toml
+src/thermoift/FeosPlugin.py
+src/thermoift/PLOT_SETTINGS.py
+src/thermoift/__init__.py
+src/thermoift/semi_emperical_correlations.py
+src/thermoift.egg-info/PKG-INFO
+src/thermoift.egg-info/SOURCES.txt
+src/thermoift.egg-info/dependency_links.txt
+src/thermoift.egg-info/requires.txt
+src/thermoift.egg-info/top_level.txt
+src/thermoift/BINARY_INTERACTION_PARAMETERS/__init__.py
+src/thermoift/BINARY_INTERACTION_PARAMETERS/KIJ/BinaryInteractions.py
+src/thermoift/BINARY_INTERACTION_PARAMETERS/KIJ/PLOT_SETTINGS.py
+src/thermoift/BINARY_INTERACTION_PARAMETERS/KIJ/__init__.py
+src/thermoift/BINARY_INTERACTION_PARAMETERS/KIJ/src/json_transform.py

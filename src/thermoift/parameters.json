@@ -1,0 +1,210 @@
+[
+    {
+        "identifier": {
+            "cas": "124-38-9",
+            "name": "carbon dioxide",
+            "iupac_name": "carbon dioxide",
+            "smiles": "O=C=O",
+            "inchi": "InChI=1S/CO2/c2-1-3"
+        },
+        "molarweight": 43.99,
+        "m": 2.53096,
+        "sigma": 2.57855,
+        "epsilon_k": 153.31864,
+        "kij_label": "CO2"
+    },
+    {
+        "identifier": {
+            "cas": "1333-74-0",
+            "name": "hydrogen",
+            "iupac_name": "molecular hydrogen",
+            "smiles": "[HH]",
+            "inchi": "InChI=1S/H2/h1H",
+            "formula": "H2"
+        },
+        "molarweight": 2.016,
+        "m": 1.0,
+        "sigma": 3.002,
+        "epsilon_k": 51.343,
+        "kij_label": "H2"
+    },
+    {
+        "identifier": {
+            "cas": "7727-37-9",
+            "name": "nitrogen",
+            "iupac_name": "molecular nitrogen",
+            "smiles": "N#N",
+            "inchi": "InChI=1S/N2/c1-2"
+        },
+        "molarweight": 28.006,
+        "m": 1.23831,
+        "sigma": 3.30009,
+        "epsilon_k": 89.41358,
+        "nb": 2.0,
+        "kij_label": "N2"
+    },
+    {
+        "identifier": {
+            "cas": "7440-37-1",
+            "name": "argon",
+            "iupac_name": "argon",
+            "smiles": "[Ar]",
+            "inchi": "InChI=1S/Ar"
+        },
+        "molarweight": 39.962,
+        "m": 1.0,
+        "sigma": 3.37751,
+        "epsilon_k": 117.80903,
+        "kij_label": "Ar"
+    },
+    {
+        "identifier": {
+            "cas": "74-82-8",
+            "name": "methane",
+            "iupac_name": "methane",
+            "smiles": "C",
+            "inchi": "InChI=1S/CH4/h1H4"
+        },
+        "molarweight": 16.031,
+        "m": 1.0,
+        "sigma": 3.70051,
+        "epsilon_k": 150.07147,
+        "kij_label": "CH4"
+    },
+        {
+        "identifier": {
+            "cas": "7782-44-7",
+            "name": "oxygen",
+            "iupac_name": "molecular oxygen",
+            "smiles": "O=O",
+            "inchi": "InChI=1S/O2/c1-2"
+        },
+        "molarweight": 31.99,
+        "m": 1.14702,
+        "sigma": 3.17933,
+        "epsilon_k": 113.62724,
+        "nb": 2.0,
+        "kij_label": "O2"
+    },
+        {
+        "identifier": {
+            "cas": "7732-18-5",
+            "name": "water",
+            "iupac_name": "oxidane",
+            "smiles": "O",
+            "inchi": "InChI=1S/H2O/h1H2"
+        },
+        "molarweight": 18.011,
+        "m": 2.36948,
+        "sigma": 2.15072,
+        "epsilon_k": 230.71557,
+        "na": 1.0,
+        "nb": 1.0,
+        "kappa_ab": 0.35319,
+        "epsilon_k_ab": 2195.10176,
+        "kij_label": "H2O"
+    },
+        {
+        "identifier": {
+            "cas": "630-08-0",
+            "name": "carbon monoxide",
+            "iupac_name": "carbon monoxide",
+            "smiles": "[C-]#[O+]",
+            "inchi": "InChI=1S/CO/c1-2"
+        },
+        "molarweight": 27.995,
+        "m": 1.32286,
+        "sigma": 3.24532,
+        "epsilon_k": 91.17087,
+        "kij_label": "CO"
+    },
+        {
+        "identifier": {
+            "cas": "10102-44-0",
+            "name": "nitrogen dioxide",
+            "iupac_name": "nitrogen dioxide",
+            "smiles": "[O]N=O",
+            "inchi": "InChI=1S/NO2/c2-1-3"
+        },
+        "molarweight": 45.993,
+        "m": 5.4723,
+        "sigma": 1.9,
+        "epsilon_k": 168.28084,
+        "nb": 2.0,
+        "kij_label": "NO2"
+    },
+        {
+        "identifier": {
+            "cas": "10102-43-9",
+            "name": "nitrogen oxide",
+            "iupac_name": "nitric oxide",
+            "smiles": "[N]=O",
+            "inchi": "InChI=1S/NO/c1-2"
+        },
+        "molarweight": 29.998,
+        "m": 4.12115,
+        "sigma": 1.9,
+        "epsilon_k": 77.07314,
+        "nb": 1.0,
+        "kij_label": "NO"
+    },
+        {
+        "identifier": {
+            "cas": "7446-09-5",
+            "name": "sulfur dioxide",
+            "iupac_name": "sulfur dioxide",
+            "smiles": "O=S=O",
+            "inchi": "InChI=1S/O2S/c1-3-2"
+        },
+        "molarweight": 63.962,
+        "m": 2.69291,
+        "sigma": 2.73194,
+        "epsilon_k": 203.03892,
+        "mu": 1.63,
+        "nb": 2.0,
+        "kij_label": "SO2"
+    },
+        {
+        "identifier": {
+            "cas": "7783-06-4",
+            "name": "hydrogen sulfide",
+            "iupac_name": "sulfane",
+            "smiles": "S",
+            "inchi": "InChI=1S/H2S/h1H2"
+        },
+        "molarweight": 33.988,
+        "m": 1.63175,
+        "sigma": 3.06168,
+        "epsilon_k": 227.15574,
+        "mu": 0.97,
+        "kij_label": "H2S"
+    },
+        {
+        "identifier": {
+            "cas": "74-98-6",
+            "name": "propane",
+            "iupac_name": "propane",
+            "smiles": "CCC",
+            "inchi": "InChI=1S/C3H8/c1-3-2/h3H2,1-2H3"
+        },
+        "molarweight": 44.063,
+        "m": 1.98602,
+        "sigma": 3.6244,
+        "epsilon_k": 209.08586,
+        "kij_label": "C3H8"
+    },
+        {
+        "identifier": {
+            "cas": "74-84-0",
+            "name": "ethane",
+            "iupac_name": "ethane",
+            "smiles": "CC",
+            "inchi": "InChI=1S/C2H6/c1-2/h1-2H3"
+        },
+        "molarweight": 30.047,
+        "m": 1.60689,
+        "sigma": 3.51681,
+        "epsilon_k": 191.45389,
+        "kij_label": "C2H6"
+    }
+]
