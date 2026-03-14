@@ -1,0 +1,3 @@
+[submodule "src/thermoift/BINARY_INTERACTION_PARAMETERS"]
+	path = src/thermoift/BINARY_INTERACTION_PARAMETERS
+	url = https://github.com/Darz2/BINARY_INTERACTION_PARAMETERS.git
