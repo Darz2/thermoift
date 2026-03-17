@@ -2,6 +2,7 @@ pyproject.toml
 src/thermoift/Analyzer.py
 src/thermoift/FeosPlugin.py
 src/thermoift/FeosPlugin_V1.py
+src/thermoift/FeosPlugin_V2.py
 src/thermoift/PLOT_SETTINGS.py
 src/thermoift/__init__.py
 src/thermoift/semi_emperical_correlations.py
