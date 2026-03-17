@@ -796,6 +796,11 @@ class DataProcessor:
         interfacial_thickness_nm,
         components,
         enrichment,
+        gamma0_CO2=None,
+        rhoL0_CO2_mol_cm3=None,
+        rhoV0_CO2_mol_cm3=None,
+        Tc_CO2=None,
+        Psat_CO2=None,
         ML_mode=True,
     ):
         """
@@ -837,6 +842,16 @@ class DataProcessor:
             Component names (typically active components)
         enrichment : tuple of float
             Enrichment values, one per component
+        gamma0_CO2 : float or None, optional
+            Pure CO2 IFT [mN/m] from semi_emperical_correlations._pure_component_cDFT.
+        rhoL0_CO2_mol_cm3 : float or None, optional
+            Pure CO2 saturated-liquid density [mol/cm3].
+        rhoV0_CO2_mol_cm3 : float or None, optional
+            Pure CO2 saturated-vapour density [mol/cm3].
+        Tc_CO2 : float or None, optional
+            Pure CO2 critical temperature [K].
+        Psat_CO2 : float or None, optional
+            Pure CO2 saturation pressure [bar].
         ML_mode : bool, optional
             If True (default), pad with all registry components for ML.
             If False, include only active components.
@@ -898,6 +913,15 @@ class DataProcessor:
         E_dict = {c: float(enrichment[i]) for i, c in enumerate(components)}
         for c in all_components:
             row[f"E_{c}"] = E_dict.get(c, 0.0)
+
+        # Pure CO2 properties (from semi_emperical_correlations)
+        # Convert density: mol/cm3 -> kg/m3 = mol/cm3 * 1e6 cm3/m3 * M g/mol * 1e-3 kg/g
+        M_CO2 = Formula("CO2").mass  # g/mol
+        row["gamma0_CO2"] = float(gamma0_CO2) if gamma0_CO2 is not None else np.nan
+        row["rhoL0_CO2"] = float(rhoL0_CO2_mol_cm3 * 1e3 * M_CO2) if rhoL0_CO2_mol_cm3 is not None else np.nan
+        row["rhoV0_CO2"] = float(rhoV0_CO2_mol_cm3 * 1e3 * M_CO2) if rhoV0_CO2_mol_cm3 is not None else np.nan
+        row["Tc_CO2"] = float(Tc_CO2) if Tc_CO2 is not None else np.nan
+        row["Psat_CO2"] = float(Psat_CO2) if Psat_CO2 is not None else np.nan
 
         return row
 

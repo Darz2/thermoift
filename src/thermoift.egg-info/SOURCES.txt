@@ -1,8 +1,6 @@
 pyproject.toml
 src/thermoift/Analyzer.py
 src/thermoift/FeosPlugin.py
-src/thermoift/FeosPlugin_V1.py
-src/thermoift/FeosPlugin_V2.py
 src/thermoift/PLOT_SETTINGS.py
 src/thermoift/__init__.py
 src/thermoift/semi_emperical_correlations.py
@@ -16,3 +14,5 @@ src/thermoift/BINARY_INTERACTION_PARAMETERS/KIJ/BinaryInteractions.py
 src/thermoift/BINARY_INTERACTION_PARAMETERS/KIJ/PLOT_SETTINGS.py
 src/thermoift/BINARY_INTERACTION_PARAMETERS/KIJ/__init__.py
 src/thermoift/BINARY_INTERACTION_PARAMETERS/KIJ/src/json_transform.py
+src/thermoift/old_src/FeosPlugin_V1.py
+src/thermoift/old_src/FeosPlugin_V2.py
