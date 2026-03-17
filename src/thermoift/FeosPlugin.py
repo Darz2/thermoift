@@ -868,6 +868,10 @@ class DataProcessor:
         row["Tc"] = float(Tc / si.KELVIN)
         row["Pc"] = float(Pc / si.BAR)
 
+        # Reduced properties
+        row["Tr"] = float(T_K / row["Tc"])
+        row["Pr"] = float(P_bar / row["Pc"])
+
         # Phase envelope limits
         row["P_bubble"] = float(P_bubble)
         row["P_dew"] = float(P_dew)
