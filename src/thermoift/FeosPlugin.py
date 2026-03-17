@@ -200,6 +200,77 @@ class RegistryManager:
             raise ValueError(f"Unknown component(s): {missing}. Available: {available}")
         return [cls._kij_labels[n] for n in component_names]
 
+    @classmethod
+    def get_available_components(cls):
+        """
+        Get all available component names from registry.
+
+        Returns
+        -------
+        list of str
+            Sorted list of all registered component names
+        """
+        cls._ensure_loaded()
+        return sorted(cls._registry.keys())
+
+    @classmethod
+    def map_csv_to_components(cls, csv_columns=None):
+        """
+        Map CSV column abbreviations to full component names from registry.
+
+        Parameters
+        ----------
+        csv_columns : list of str, optional
+            CSV column abbreviations (e.g. ['CO2', 'H2', 'Ar', 'N2', ...]).
+            If None, defaults to ``['CO2', 'H2', 'Ar', 'N2', 'CH4', 'O2', 'CO', 'H2S']``.
+
+        Returns
+        -------
+        list of str
+            Full component names in same order
+
+        Raises
+        ------
+        ValueError
+            If a CSV column doesn't match any registered component
+        """
+        if csv_columns is None:
+            csv_columns = ['CO2', 'H2', 'Ar', 'N2', 'CH4', 'O2', 'CO', 'H2S']
+
+        cls._ensure_loaded()
+        # Build mapping: abbreviation -> full name from registry
+        # CO2 -> carbon dioxide, H2 -> hydrogen, etc.
+        csv_to_full = {
+            'CO2': 'carbon dioxide',
+            'H2': 'hydrogen',
+            'Ar': 'argon',
+            'N2': 'nitrogen',
+            'CH4': 'methane',
+            'O2': 'oxygen',
+            'CO': 'carbon monoxide',
+            'H2S': 'hydrogen sulfide',
+        }
+
+        missing = [col for col in csv_columns if col not in csv_to_full]
+        if missing:
+            raise ValueError(
+                f"CSV columns {missing} not found in mapping. "
+                f"Available: {sorted(csv_to_full.keys())}"
+            )
+
+        result = [csv_to_full[col] for col in csv_columns]
+
+        # Verify all mapped names exist in registry
+        unknown = [name for name in result if name not in cls._registry]
+        if unknown:
+            available = sorted(cls._registry.keys())
+            raise ValueError(
+                f"Component(s) {unknown} not in registry. "
+                f"Available: {available}"
+            )
+
+        return result
+
 
 ############# CLASS 2: CompositionHandler #############
 
@@ -227,6 +298,50 @@ class CompositionHandler:
         C2_values = np.linspace(0.0, 1.0 - CO2, n_points)
         feeds = np.array([[CO2, C2, 1.0 - CO2 - C2] for C2 in C2_values])
         return feeds
+
+    @staticmethod
+    def load_compositions(csv_path, components=None, n=None):
+        """
+        Load feed compositions from a CSV file.
+
+        Reads the specified component columns, filters to rows where at
+        least one of the non-CO2 components is non-zero, normalizes each
+        row, and returns them as a feeds array ready for ``make_feeds``.
+
+        Parameters
+        ----------
+        csv_path : str or Path
+            Path to the CSV file (e.g. ``Combined_compositions.csv``).
+        components : list of str, optional
+            Column names to extract (e.g. ``["CO2", "H2", "Ar"]``).
+            If None, defaults to ``['CO2', 'H2', 'Ar', 'N2', 'CH4', 'O2', 'CO', 'H2S']``.
+        n : int, optional
+            If given, return only the first *n* compositions.
+
+        Returns
+        -------
+        feeds : np.ndarray
+            Array of shape (n_compositions, len(components)).
+        """
+        if components is None:
+            components = ['CO2', 'H2', 'Ar', 'N2', 'CH4', 'O2', 'CO', 'H2S']
+
+        df = pd.read_csv(csv_path)
+        missing = [c for c in components if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"Columns {missing} not found in {csv_path}. "
+                f"Available: {list(df.columns)}"
+            )
+        sub = df[components].values.astype(float)
+        # keep only rows where the composition is non-trivial
+        row_sums = sub.sum(axis=1)
+        sub = sub[row_sums > 0]
+        # normalize
+        sub = sub / sub.sum(axis=1, keepdims=True)
+        if n is not None:
+            sub = sub[:n]
+        return sub
 
     @staticmethod
     def make_feeds(*compositions):
@@ -441,16 +556,26 @@ class ParameterBuilder:
             Reduced list of component names with non-zero composition.
         kij_map : dict
             Original kij map keyed by (component_i, component_j) tuples.
+            Keys can be either full names or KIJ labels.
 
         Returns
         -------
         active_map : dict
             Filtered kij map with only active component pairs.
         """
-        active_set = set(active_components)
+        RegistryManager._ensure_loaded()
+        # Convert active component names to KIJ labels for comparison
+        active_labels = set()
+        for comp in active_components:
+            if comp in RegistryManager._kij_labels:
+                active_labels.add(RegistryManager._kij_labels[comp])
+            else:
+                # If not in registry, assume it's already a KIJ label
+                active_labels.add(comp)
+
         active_map = {
             (i, j): v for (i, j), v in kij_map.items()
-            if i in active_set and j in active_set
+            if i in active_labels and j in active_labels
         }
         return active_map
 
@@ -989,31 +1114,40 @@ class DataProcessor:
         dict
             Mapping of feed keys to saved file paths
         """
-        os.makedirs(folder, exist_ok=True)
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except Exception as e:
+            print(f"Warning: Could not create folder '{folder}': {e}. Skipping CSV export.")
+            return {}
+
         saved_files = {}
 
         for feed_key in VLE_DFT:
-            # Save interfacial data
-            all_data = []
-            for T_K, data_list in VLE_DFT[feed_key]["interfacial_data"].items():
-                all_data.extend(data_list)
+            try:
+                # Save interfacial data
+                all_data = []
+                for T_K, data_list in VLE_DFT[feed_key]["interfacial_data"].items():
+                    all_data.extend(data_list)
 
-            df = pd.DataFrame(all_data)
-            csv_filename = os.path.join(folder, f"{feed_key}_interfacial_results.csv")
-            df.to_csv(csv_filename, index=False)
+                df = pd.DataFrame(all_data)
+                csv_filename = os.path.join(folder, f"{feed_key}_interfacial_results.csv")
+                df.to_csv(csv_filename, index=False)
 
-            if verbose:
-                print(f"Saved {len(df)} rows to {csv_filename}")
+                if verbose:
+                    print(f"Saved {len(df)} rows to {csv_filename}")
 
-            # Save phase envelope (isothermal lines only)
-            envelope_filename = os.path.join(folder, f"{feed_key}_phase_envelope.csv")
-            pd.DataFrame(VLE_DFT[feed_key]["phase_envelope"]["isothermal_lines"]).to_csv(
-                envelope_filename, index=False)
+                # Save phase envelope (isothermal lines only)
+                envelope_filename = os.path.join(folder, f"{feed_key}_phase_envelope.csv")
+                pd.DataFrame(VLE_DFT[feed_key]["phase_envelope"]["isothermal_lines"]).to_csv(
+                    envelope_filename, index=False)
 
-            saved_files[feed_key] = {
-                "interfacial": csv_filename,
-                "envelope": envelope_filename
-            }
+                saved_files[feed_key] = {
+                    "interfacial": csv_filename,
+                    "envelope": envelope_filename
+                }
+            except Exception as e:
+                print(f"Warning: Could not save CSV for {feed_key}: {e}")
+                continue
 
         return saved_files
 
@@ -1278,13 +1412,17 @@ class PlottingEngine:
         folder : str
             Output folder
         """
-        os.makedirs(folder, exist_ok=True)
+        try:
+            os.makedirs(folder, exist_ok=True)
 
-        png_path = os.path.join(folder, f"{filename_base}.png")
-        pdf_path = os.path.join(folder, f"{filename_base}.pdf")
+            png_path = os.path.join(folder, f"{filename_base}.png")
+            pdf_path = os.path.join(folder, f"{filename_base}.pdf")
 
-        PlottingEngine.save_figure(fig, png_path)
-        PlottingEngine.save_figure(fig, pdf_path)
+            PlottingEngine.save_figure(fig, png_path)
+            PlottingEngine.save_figure(fig, pdf_path)
+        except Exception as e:
+            print(f"Warning: Could not save plots to '{folder}': {e}")
+            return None
 
 
 ############# CLASS 9: UtilityFunctions #############
@@ -1352,6 +1490,10 @@ def generate_feeds(CO2, n_points):
 def make_feeds(*compositions):
     """Backward compatibility wrapper."""
     return CompositionHandler.make_feeds(*compositions)
+
+def load_compositions(csv_path, components=None, n=None):
+    """Backward compatibility wrapper."""
+    return CompositionHandler.load_compositions(csv_path, components, n=n)
 
 def normalize_z(z):
     """Backward compatibility wrapper."""
