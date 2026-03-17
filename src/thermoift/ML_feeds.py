@@ -1,0 +1,547 @@
+#!/usr/bin/env python
+
+import  itertools
+import  json
+import  numpy as np
+import  pandas as pd
+from    pathlib import Path
+from    .rng_utils import get_rng
+
+_HERE = Path(__file__).parent
+_DEFAULT_TEMPLATES_FILE = _HERE / "IndustrialFeeds.json"
+
+
+class FeedsBuilder:
+    """Build industrial, random, and systematic CO2-rich mixture feeds."""
+
+    def __init__(self, templates_file=None, rng_type="PCG64"):
+        """
+        Initialize FeedsBuilder with optional custom templates file and RNG type.
+
+        Parameters
+        ----------
+        templates_file : str or Path, optional
+            Path to industrial templates JSON file. Defaults to bundled file.
+        rng_type : str, default="PCG64"
+            Random number generator type: "PCG64", "MT19937", "SFC64", or "Philox"
+        """
+        self.templates_file = templates_file or _DEFAULT_TEMPLATES_FILE
+        self.templates = None
+        self.rng_type = rng_type
+
+    def load_industrial_templates(self):
+        """Load industrial feed templates from JSON file."""
+        with open(self.templates_file) as f:
+            self.templates = json.load(f)
+        return self.templates
+
+    def random_impurity_split(self, n_impurities, total_impurity, n_samples, rng=None):
+        """Generate random impurity splits using Dirichlet distribution."""
+        if not isinstance(rng, np.random.Generator):
+            rng = get_rng(rng, rng_type=self.rng_type)
+        if n_impurities == 1:
+            return np.full((n_samples, 1), total_impurity)
+
+        samples = rng.dirichlet(alpha=np.ones(n_impurities), size=n_samples)
+        return samples * total_impurity
+
+    @staticmethod
+    def systematic_impurity_split(n_impurities, total_impurity, step=0.01):
+        """Generate systematic impurity splits at fixed step intervals."""
+        if n_impurities == 1:
+            return np.array([[total_impurity]])
+
+        n_units = round(total_impurity / step)
+        if not np.isclose(n_units * step, total_impurity, atol=1e-12):
+            raise ValueError(
+                f"step={step} does not match total_impurity={total_impurity}. "
+                f"Choose a step such that total_impurity / step is an integer."
+            )
+
+        results = []
+
+        def generate_compositions(parts, total):
+            if parts == 1:
+                yield (total,)
+            else:
+                for i in range(total + 1):
+                    for rest in generate_compositions(parts - 1, total - i):
+                        yield (i,) + rest
+
+        for comp in generate_compositions(n_impurities, n_units):
+            results.append(np.array(comp) * step)
+
+        return np.array(results)
+
+    def industrial_feeds_from_bounds(
+        self,
+        components,
+        co2_levels,
+        templates=None,
+        n_samples_per_template=20,
+        rng=None,
+        co2_name="CO2",
+    ):
+        """
+        Generate industrial feeds from impurity upper bounds.
+
+        Template format
+        ---------------
+        {
+            "name": "netl_limits",
+            "bounds": {
+                "O2": 1.0e-5,
+                "H2S": 1.0e-4,
+                "N2": 0.04,
+                "CO": 3.5e-5
+            }
+        }
+
+        Rules
+        -----
+        1. CO2 is fixed to one of the requested co2_levels.
+        2. Non-CO2 species satisfy 0 <= x_i <= bound_i.
+        3. Sum of impurities is exactly 1 - x_CO2.
+        4. If sum(bounds) < 1 - x_CO2, that case is infeasible and skipped.
+        """
+        if templates is None:
+            if self.templates is None:
+                self.load_industrial_templates()
+            templates = self.templates
+
+        if not isinstance(rng, np.random.Generator):
+            rng = get_rng(rng, rng_type=self.rng_type)
+        rows = []
+
+        co2_levels = tuple(x for x in co2_levels if x >= 0.95)
+
+        for template in templates:
+            if "bounds" not in template:
+                continue
+
+            name = template["name"]
+            bounds_dict = template["bounds"]
+
+            impurity_species = [
+                c for c in bounds_dict.keys()
+                if c in components and c != co2_name
+            ]
+
+            if not impurity_species:
+                continue
+
+            upper = np.array([bounds_dict[c] for c in impurity_species], dtype=float)
+
+            for x_co2 in co2_levels:
+                target_non_co2 = 1.0 - x_co2
+
+                # Feasibility check
+                if upper.sum() < target_non_co2 - 1e-12:
+                    continue
+
+                for _ in range(n_samples_per_template):
+                    split = np.zeros_like(upper)
+                    remaining = target_non_co2
+
+                    # Randomize allocation order for diversity
+                    order = rng.permutation(len(upper))
+                    feasible = True
+
+                    for pos, idx in enumerate(order):
+                        remaining_upper = upper[order[pos + 1:]].sum() if pos + 1 < len(order) else 0.0
+
+                        # minimum required here so the remaining variables can still fill the target
+                        low = max(0.0, remaining - remaining_upper)
+
+                        # maximum allowed here
+                        high = min(upper[idx], remaining)
+
+                        if high < low - 1e-14:
+                            feasible = False
+                            break
+
+                        if pos == len(order) - 1:
+                            value = remaining
+                        else:
+                            value = rng.uniform(low, high)
+
+                        split[idx] = value
+                        remaining -= value
+
+                    if not feasible:
+                        continue
+
+                    if not np.isclose(split.sum(), target_non_co2, atol=1e-10):
+                        continue
+
+                    row = {c: 0.0 for c in components}
+                    row["feed_source"] = "industrial_bound"
+                    row["template_name"] = name
+                    row[co2_name] = x_co2
+
+                    for comp, x in zip(impurity_species, split):
+                        row[comp] = x
+
+                    active = [co2_name] + [c for c, x in zip(impurity_species, split) if x > 0.0]
+                    row["mixture_size"] = len(active)
+                    row["active_components"] = ",".join(active)
+
+                    total = sum(row[c] for c in components)
+                    if not np.isclose(total, 1.0, atol=1e-10):
+                        continue
+
+                    rows.append(row)
+
+        return pd.DataFrame(rows)
+    
+    def industrial_feeds_from_ranges(
+        self,
+        components,
+        templates=None,
+        n_samples_per_template=20,
+        rng=None,
+        co2_name="CO2",
+        trace_value=1.0e-6,
+        max_attempts_per_template=1000,
+    ):
+        """
+        Generate industrial feeds from reported composition ranges.
+
+        Template format
+        ---------------
+        {
+            "name": "cortez_pipeline",
+            "ranges": {
+                "CO2": [0.95, 0.95],
+                "H2S": [2.0e-5, 2.0e-5],
+                "N2": [0.04, 0.04],
+                "CH4": [0.01, 0.05]
+            }
+        }
+
+        Optional notes block
+        --------------------
+        {
+            "name": "jackson_dome_pipeline",
+            "ranges": {"CO2": [0.987, 0.994]},
+            "notes": {"H2S": "trace", "N2": "trace", "CH4": "trace"}
+        }
+
+        Best-practice rules
+        -------------------
+        1. Sample non-CO2 species from their reported ranges.
+        2. Add trace species with a tiny value.
+        3. Compute CO2 as the exact remainder:
+               x_CO2 = 1 - sum(non-CO2)
+        4. Accept only if computed CO2 lies inside the reported CO2 range.
+        5. No renormalization of impurities.
+        6. Reject infeasible samples and resample.
+        """
+        if templates is None:
+            if self.templates is None:
+                self.load_industrial_templates()
+            templates = self.templates
+
+        if not isinstance(rng, np.random.Generator):
+            rng = get_rng(rng, rng_type=self.rng_type)
+        rows = []
+
+        for template in templates:
+            if "ranges" not in template:
+                continue
+
+            name = template["name"]
+            ranges = template["ranges"]
+            notes = template.get("notes", {})
+
+            if co2_name not in ranges:
+                continue
+
+            co2_low, co2_high = ranges[co2_name]
+            if co2_low > co2_high:
+                raise ValueError(f"Invalid CO2 range in template '{name}': {ranges[co2_name]}")
+
+            # Explicit modeled impurities from ranges
+            impurity_species = [
+                c for c in ranges.keys()
+                if c != co2_name and c in components
+            ]
+
+            # Trace species from notes
+            trace_species = [
+                c for c, note in notes.items()
+                if c in components and c != co2_name and isinstance(note, str) and note.lower() == "trace"
+            ]
+
+            accepted = 0
+            attempts = 0
+
+            while accepted < n_samples_per_template and attempts < max_attempts_per_template:
+                attempts += 1
+
+                sampled = {}
+
+                # Sample explicit impurity ranges
+                bad_range = False
+                for comp in impurity_species:
+                    low, high = ranges[comp]
+                    if low > high:
+                        bad_range = True
+                        break
+                    sampled[comp] = rng.uniform(low, high) if low < high else low
+
+                if bad_range:
+                    raise ValueError(f"Invalid impurity range in template '{name}'")
+
+                # Add trace species
+                for comp in trace_species:
+                    if comp not in sampled:
+                        sampled[comp] = trace_value
+
+                non_co2_sum = sum(sampled.values())
+                x_co2 = 1.0 - non_co2_sum
+
+                # Reject if total impurities exceed 1
+                if x_co2 < -1e-12:
+                    continue
+
+                # Reject if computed CO2 is outside the reported CO2 range
+                if x_co2 < co2_low - 1e-12 or x_co2 > co2_high + 1e-12:
+                    continue
+
+                # Enforce minimum CO2 >= 95%
+                if x_co2 < 0.95 - 1e-12:
+                    continue
+
+                # Build row
+                row = {c: 0.0 for c in components}
+                row["feed_source"] = "industrial_range"
+                row["template_name"] = name
+                row[co2_name] = x_co2
+
+                for comp, x in sampled.items():
+                    row[comp] = x
+
+                active = [co2_name] + [c for c in components if c != co2_name and row[c] > 0.0]
+                row["mixture_size"] = len(active)
+                row["active_components"] = ",".join(active)
+
+                total = sum(row[c] for c in components)
+                if not np.isclose(total, 1.0, atol=1e-10):
+                    continue
+
+                rows.append(row)
+                accepted += 1
+
+        return pd.DataFrame(rows)
+
+    def generate_random_feeds(
+        self,
+        components,
+        co2_name="CO2",
+        mixture_sizes=(2, 3, 4, 5, 6, 7, 8),
+        co2_levels=(0.95, 0.96, 0.97, 0.98, 0.99),
+        n_random_samples=100,
+        rng=None,
+    ):
+        """Generate random feed compositions with specified mixture sizes and CO2 levels."""
+        if co2_name not in components:
+            raise ValueError(f"{co2_name} must be in components")
+
+        co2_levels = tuple(x for x in co2_levels if x >= 0.95)
+
+        impurities_pool = [c for c in components if c != co2_name]
+        rows = []
+
+        for mixture_size in mixture_sizes:
+            n_impurities = mixture_size - 1
+            if n_impurities < 1 or n_impurities > len(impurities_pool):
+                continue
+
+            for impurity_set in itertools.combinations(impurities_pool, n_impurities):
+                for x_co2 in co2_levels:
+                    total_impurity = 1.0 - x_co2
+                    impurity_splits = self.random_impurity_split(
+                        n_impurities=n_impurities,
+                        total_impurity=total_impurity,
+                        n_samples=n_random_samples,
+                        rng=rng,
+                    )
+
+                    for split in impurity_splits:
+                        row = {c: 0.0 for c in components}
+                        row["mixture_size"] = mixture_size
+                        row["active_components"] = ",".join([co2_name] + list(impurity_set))
+                        row["feed_source"] = "random"
+                        row["template_name"] = "dirichlet"
+                        row[co2_name] = x_co2
+
+                        for comp, x in zip(impurity_set, split):
+                            row[comp] = x
+
+                        rows.append(row)
+
+        return pd.DataFrame(rows)
+
+    def generate_systematic_feeds(
+        self,
+        components,
+        co2_name="CO2",
+        mixture_sizes=(2, 3, 4),
+        co2_levels=(0.95, 0.96, 0.97, 0.98, 0.99),
+        step=0.01,
+    ):
+        """Generate systematic feed compositions at fixed step intervals."""
+        if co2_name not in components:
+            raise ValueError(f"{co2_name} must be in components")
+
+        co2_levels = tuple(x for x in co2_levels if x >= 0.95)
+
+        impurities_pool = [c for c in components if c != co2_name]
+        rows = []
+
+        for mixture_size in mixture_sizes:
+            n_impurities = mixture_size - 1
+            if n_impurities < 1 or n_impurities > len(impurities_pool):
+                continue
+
+            for impurity_set in itertools.combinations(impurities_pool, n_impurities):
+                for x_co2 in co2_levels:
+                    total_impurity = 1.0 - x_co2
+                    impurity_splits = self.systematic_impurity_split(
+                        n_impurities=n_impurities,
+                        total_impurity=total_impurity,
+                        step=step,
+                    )
+
+                    for split in impurity_splits:
+                        row = {c: 0.0 for c in components}
+                        row["mixture_size"] = mixture_size
+                        row["active_components"] = ",".join([co2_name] + list(impurity_set))
+                        row["feed_source"] = "systematic"
+                        row["template_name"] = "systematic_grid"
+                        row[co2_name] = x_co2
+
+                        for comp, x in zip(impurity_set, split):
+                            row[comp] = x
+
+                        rows.append(row)
+
+        return pd.DataFrame(rows)
+
+    def combine_feeds_random_systematic_industrial(
+        self,
+        components,
+        n_total_target=10000,
+        co2_levels=(0.95, 0.96, 0.97, 0.98, 0.99),
+        rng=42,
+    ):
+        """
+        Build a combined dataset with approximately:
+          70% random
+          20% systematic
+          10% industrial
+        """
+        n_random_target = int(0.70 * n_total_target)
+        n_systematic_target = int(0.20 * n_total_target)
+        n_industrial_target = n_total_target - n_random_target - n_systematic_target
+
+        # --- random pool ---
+        df_random_pool = self.generate_random_feeds(
+            components=components,
+            mixture_sizes=(2, 3, 4, 5, 6, 7, 8),
+            co2_levels=co2_levels,
+            n_random_samples=20,
+            rng=rng,
+        )
+
+        # --- systematic pool ---
+        df_systematic_pool = self.generate_systematic_feeds(
+            components=components,
+            mixture_sizes=(2, 3, 4),
+            co2_levels=co2_levels,
+            step=0.01,
+        )
+
+        # --- industrial templates ---
+        if self.templates is None:
+            self.load_industrial_templates()
+
+        df_ind_bounds = self.industrial_feeds_from_bounds(
+            components=components,
+            co2_levels=co2_levels,
+            templates=self.templates,
+            rng=rng,
+        )
+        df_ind_ranges = self.industrial_feeds_from_ranges(
+            components=components,
+            templates=self.templates,
+            rng=rng,
+        )
+        df_industrial_pool = pd.concat([df_ind_bounds, df_ind_ranges], ignore_index=True)
+
+        # sample from each pool
+        rng_obj = get_rng(rng, rng_type=self.rng_type) if not isinstance(rng, np.random.Generator) else rng
+
+        def sample_df(df, n):
+            if len(df) <= n:
+                return df.copy()
+            idx = rng_obj.choice(df.index, size=n, replace=False)
+            return df.loc[idx].copy()
+
+        df_random = sample_df(df_random_pool, n_random_target)
+        df_systematic = sample_df(df_systematic_pool, n_systematic_target)
+
+        # industrial pool may be small, so allow replacement if needed
+        if len(df_industrial_pool) == 0:
+            df_industrial = df_industrial_pool.copy()
+        elif len(df_industrial_pool) < n_industrial_target:
+            idx = rng_obj.choice(df_industrial_pool.index, size=n_industrial_target, replace=True)
+            df_industrial = df_industrial_pool.loc[idx].copy().reset_index(drop=True)
+        else:
+            df_industrial = sample_df(df_industrial_pool, n_industrial_target)
+
+        df_all = pd.concat([df_random, df_systematic, df_industrial], ignore_index=True)
+
+        ordered_cols = ["feed_source", "template_name", "mixture_size", "active_components"] + components
+        df_all = df_all[ordered_cols]
+
+        return df_all
+
+
+if __name__ == "__main__":
+    
+    from .rng_utils import describe_rngs
+
+    components = ["CO2", "N2", "O2", "Ar", "CH4", "H2", "CO", "H2S", "SO2", "NO", "NO2"]
+
+    # Show available RNG options
+    describe_rngs()
+    print()
+
+    # Example 1: Using default PCG64
+    print("Generating feeds with PCG64 (default)...")
+    builder_pcg = FeedsBuilder(rng_type="PCG64")
+    df_pcg = builder_pcg.combine_feeds_random_systematic_industrial(
+        components=components,
+        n_total_target=5000,
+        co2_levels=(0.95, 0.96, 0.97, 0.98, 0.99),
+        rng=42,
+    )
+    print(f"Generated {len(df_pcg)} feeds")
+    print(df_pcg.head())
+    print(df_pcg["feed_source"].value_counts())
+    print()
+
+    # Example 2: Using MT19937 (Mersenne Twister)
+    print("Generating feeds with MT19937...")
+    builder_mt = FeedsBuilder(rng_type="MT19937")
+    df_mt = builder_mt.combine_feeds_random_systematic_industrial(
+        components=components,
+        n_total_target=5000,
+        co2_levels=(0.95, 0.96, 0.97, 0.98, 0.99),
+        rng=42,
+    )
+    print(f"Generated {len(df_mt)} feeds with MT19937")
+    df_mt.to_csv("co2_rich_mixed_strategy_feeds_mt19937.csv", index=False)
+    df_pcg.to_csv("co2_rich_mixed_strategy_feeds_pcg64.csv", index=False)

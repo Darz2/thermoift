@@ -1,5 +1,24 @@
-from . import PLOT_SETTINGS
-from . import FeosPlugin
-from . import semi_emperical_correlations
-from .BINARY_INTERACTION_PARAMETERS.KIJ import BinaryInteractions as KIJ
-from .Analyzer import Analyzer
+import importlib as _importlib
+
+from .ML_feeds import FeedsBuilder
+from . import rng_utils
+
+def __getattr__(name):
+    _lazy = {
+        "PLOT_SETTINGS":               f"{__name__}.PLOT_SETTINGS",
+        "FeosPlugin":                  f"{__name__}.FeosPlugin",
+        "semi_emperical_correlations":  f"{__name__}.semi_emperical_correlations",
+        "Analyzer":                    f"{__name__}.Analyzer",
+        "KIJ":                         f"{__name__}.BINARY_INTERACTION_PARAMETERS.KIJ",
+    }
+    if name in _lazy:
+        mod = _importlib.import_module(_lazy[name])
+        if name == "KIJ":
+            obj = mod.BinaryInteractions
+        elif name == "Analyzer":
+            obj = mod.Analyzer
+        else:
+            obj = mod
+        globals()[name] = obj
+        return obj
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -36,6 +36,7 @@ from scipy.ndimage import binary_erosion
 
 from . import PLOT_SETTINGS as ps
 from .BINARY_INTERACTION_PARAMETERS.KIJ import BinaryInteractions as KIJ
+from .rng_utils import get_rng, describe_rngs
 
 _HERE = Path(__file__).parent
 
@@ -1310,6 +1311,34 @@ class UtilityFunctions:
             LaTeX-formatted formula
         """
         return re.sub(r"(\d+)", r"$_{\1}$", formula)
+
+    @staticmethod
+    def get_random_generator(seed=None, rng_type="PCG64"):
+        """
+        Get a numpy random Generator with specified bit generator.
+
+        Parameters
+        ----------
+        seed : int, optional
+            Seed for the random number generator. If None, uses entropy from OS.
+        rng_type : str, default="PCG64"
+            Type of random number generator: "PCG64", "MT19937", "SFC64", or "Philox"
+
+        Returns
+        -------
+        np.random.Generator
+            A numpy Generator with the specified bit generator.
+
+        See Also
+        --------
+        describe_available_rngs : Print available RNG options
+        """
+        return get_rng(seed, rng_type)
+
+    @staticmethod
+    def describe_available_rngs():
+        """Print a description of available random number generators."""
+        describe_rngs()
 
 
 ############# BACKWARD COMPATIBILITY WRAPPERS #############
