@@ -1098,14 +1098,15 @@ class DataProcessor:
     @staticmethod
     def export_to_csv(VLE_DFT, folder="CSV", verbose=False):
         """
-        Save VLE-DFT interfacial and phase envelope data to CSV files.
+        Save VLE-DFT interfacial and phase envelope data to CSV files
+        in separate subfolders.
 
         Parameters
         ----------
         VLE_DFT : dict
             VLE-DFT data structure
         folder : str
-            Output folder for CSV files
+            Output root folder for CSV files
         verbose : bool
             Print progress if True
 
@@ -1115,7 +1116,12 @@ class DataProcessor:
             Mapping of feed keys to saved file paths
         """
         try:
-            os.makedirs(folder, exist_ok=True)
+            interfacial_folder = os.path.join(folder, "interfacial_results")
+            envelope_folder = os.path.join(folder, "phase_envelope")
+
+            os.makedirs(interfacial_folder, exist_ok=True)
+            os.makedirs(envelope_folder, exist_ok=True)
+
         except Exception as e:
             print(f"Warning: Could not create folder '{folder}': {e}. Skipping CSV export.")
             return {}
@@ -1130,21 +1136,32 @@ class DataProcessor:
                     all_data.extend(data_list)
 
                 df = pd.DataFrame(all_data)
-                csv_filename = os.path.join(folder, f"{feed_key}_interfacial_results.csv")
+                csv_filename = os.path.join(
+                    interfacial_folder,
+                    f"{feed_key}_interfacial_results.csv"
+                )
                 df.to_csv(csv_filename, index=False)
 
                 if verbose:
                     print(f"Saved {len(df)} rows to {csv_filename}")
 
-                # Save phase envelope (isothermal lines only)
-                envelope_filename = os.path.join(folder, f"{feed_key}_phase_envelope.csv")
-                pd.DataFrame(VLE_DFT[feed_key]["phase_envelope"]["isothermal_lines"]).to_csv(
-                    envelope_filename, index=False)
+                # Save phase envelope data
+                envelope_filename = os.path.join(
+                    envelope_folder,
+                    f"{feed_key}_phase_envelope.csv"
+                )
+                pd.DataFrame(
+                    VLE_DFT[feed_key]["phase_envelope"]["isothermal_lines"]
+                ).to_csv(envelope_filename, index=False)
+
+                if verbose:
+                    print(f"Saved phase envelope data to {envelope_filename}")
 
                 saved_files[feed_key] = {
                     "interfacial": csv_filename,
                     "envelope": envelope_filename
                 }
+
             except Exception as e:
                 print(f"Warning: Could not save CSV for {feed_key}: {e}")
                 continue
@@ -1401,7 +1418,7 @@ class PlottingEngine:
     @staticmethod
     def save_plots(fig, filename_base, folder="PLOTS"):
         """
-        Save a figure as both PNG and PDF.
+        Save a figure as both PNG and PDF in separate folders.
 
         Parameters
         ----------
@@ -1410,16 +1427,21 @@ class PlottingEngine:
         filename_base : str
             Base filename without extension
         folder : str
-            Output folder
+            Output root folder
         """
         try:
-            os.makedirs(folder, exist_ok=True)
+            png_folder = os.path.join(folder, "PNG")
+            pdf_folder = os.path.join(folder, "PDF")
 
-            png_path = os.path.join(folder, f"{filename_base}.png")
-            pdf_path = os.path.join(folder, f"{filename_base}.pdf")
+            os.makedirs(png_folder, exist_ok=True)
+            os.makedirs(pdf_folder, exist_ok=True)
+
+            png_path = os.path.join(png_folder, f"{filename_base}.png")
+            pdf_path = os.path.join(pdf_folder, f"{filename_base}.pdf")
 
             PlottingEngine.save_figure(fig, png_path)
             PlottingEngine.save_figure(fig, pdf_path)
+
         except Exception as e:
             print(f"Warning: Could not save plots to '{folder}': {e}")
             return None

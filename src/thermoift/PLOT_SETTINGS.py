@@ -227,7 +227,6 @@ def save_figure(fig, filename):
     fig.savefig(file_path, dpi=resolution_value, bbox_inches='tight')
     fig.savefig(fr"{filename}", dpi=resolution_value, bbox_inches='tight')
     
-
 def save_plot(fig, filename_base, folder="PLOTS"):
     """
     Save a figure as both PNG and PDF using save_figure.

@@ -2,6 +2,22 @@ Metadata-Version: 2.4
 Name: thermoift
 Version: 0.2.0
 Summary: Thermodynamics and Interfacial Tension tools for N-component mixtures using PC-SAFT via feos
+Author-email: Darshan Raju <d.raju@tudelft.nl>
+License: Proprietary
+Project-URL: Homepage, https://github.com/darshan-raju/thermoift
+Project-URL: Repository, https://github.com/darshan-raju/thermoift
+Keywords: thermodynamics,interfacial-tension,PC-SAFT,feos,mixtures,Machine Learning,Data Generation
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: License :: Other/Proprietary License
+Classifier: Intended Audience :: Science/Research
+Classifier: Topic :: Scientific/Engineering :: Chemistry
+Classifier: Topic :: Scientific/Engineering :: Physics
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
 Requires-Dist: feos>=0.9.3
 Requires-Dist: numpy
 Requires-Dist: pandas
@@ -11,3 +27,7 @@ Requires-Dist: molmass==2026.1.8
 Requires-Dist: si-units==0.11.1
 Requires-Dist: sympy==1.14.0
 Requires-Dist: ctREFPROP==0.10.5
+Requires-Dist: scienceplots
+Provides-Extra: test
+Requires-Dist: pytest>=8; extra == "test"
+Requires-Dist: pytest-cov>=5; extra == "test"

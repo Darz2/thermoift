@@ -1,11 +1,27 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=69", "wheel", "build"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "thermoift"
 version = "0.2.0"
 description = "Thermodynamics and Interfacial Tension tools for N-component mixtures using PC-SAFT via feos"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Darshan Raju", email = "d.raju@tudelft.nl" }]
+license = { text = "Proprietary" }
+keywords = ["thermodynamics", "interfacial-tension", "PC-SAFT", "feos", "mixtures", "Machine Learning", "Data Generation"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: Other/Proprietary License",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 
 dependencies = [
     "feos>=0.9.3",
@@ -13,11 +29,19 @@ dependencies = [
     "pandas",
     "matplotlib",
     "scipy",
-    "molmass == 2026.1.8",
-    "si-units == 0.11.1 ",
-    "sympy == 1.14.0",
-    "ctREFPROP == 0.10.5",
+    "molmass==2026.1.8",
+    "si-units==0.11.1",
+    "sympy==1.14.0",
+    "ctREFPROP==0.10.5",
+    "scienceplots",
 ]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-cov>=5"]
+
+[project.urls]
+Homepage = "https://github.com/darshan-raju/thermoift"
+Repository = "https://github.com/darshan-raju/thermoift"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

@@ -7,3 +7,8 @@ molmass==2026.1.8
 si-units==0.11.1
 sympy==1.14.0
 ctREFPROP==0.10.5
+scienceplots
+
+[test]
+pytest>=8
+pytest-cov>=5
