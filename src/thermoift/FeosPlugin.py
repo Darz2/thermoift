@@ -1634,5 +1634,6 @@ def latex_formula(formula: str) -> str:
 
 
 ############# Module Initialization #############
-# Load registry at module import time for backward compatibility
-RegistryManager.load_registry()
+# Registry is NOT auto-loaded at import time.
+# Users must explicitly call RegistryManager.load_registry(json_path="path/to/parameters.json")
+# in their scripts before using other functions.
