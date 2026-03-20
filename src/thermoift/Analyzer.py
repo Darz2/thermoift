@@ -1,16 +1,95 @@
 #!/usr/bin/env python
+"""
+Analyzer module for ThermoIFT.
+
+Provides utilities for composition analysis, validation, and formatting
+of thermodynamic data from vapor-liquid equilibrium calculations.
+
+Classes
+-------
+Analyzer
+    Utility class for composition analysis and formatting.
+
+Example
+-------
+>>> from thermoift import Analyzer
+>>> result = Analyzer.load_csv("vle_results.csv")
+>>> print(result["summary"])
+>>> table = Analyzer.format_table(filepath="vle_results.csv", row_index=0)
+"""
+
 import numpy as np
 import pandas as pd
 from typing import Optional, Dict, List
+
 
 class Analyzer:
     """
     Utility class for composition analysis and formatting.
 
-    Main idea:
-    - CSV-first workflow
-    - auto-detect components from z_/x_/y_ columns
-    - allow manual arrays when needed
+    This class provides static methods for analyzing and validating
+    thermodynamic composition data from vapor-liquid equilibrium (VLE)
+    calculations. It supports both CSV-first workflows with auto-detection
+    of components and manual array inputs.
+
+    The class handles three types of compositions:
+    - z: Feed composition (overall)
+    - x: Liquid phase composition
+    - y: Vapor phase composition
+    - E: Enrichment factors (optional)
+
+    Class Attributes
+    ----------------
+    DEFAULT_DECIMALS : int
+        Default decimal places for formatting (6).
+    DEFAULT_TOL : float
+        Default tolerance for sum validation (1e-6).
+    DEFAULT_COMPONENTS : List[str]
+        List of commonly used component names.
+
+    Methods
+    -------
+    Validation:
+        validate_sums(z, x, y, tol)
+            Validate that compositions sum to 1.
+
+    Formatting:
+        format_table(components, z, x, y, E, filepath, row_index)
+            Format one composition row as a DataFrame.
+
+    Reporting:
+        report(components, z, x, y, E, T_K, P_bar, filepath, row_index)
+            Create a complete report for one composition row.
+
+    Data Loading:
+        load_csv(filepath, components)
+            Load CSV and validate all rows automatically.
+
+    Example
+    -------
+    >>> from thermoift import Analyzer
+    >>>
+    >>> # CSV mode - auto-detect components
+    >>> result = Analyzer.load_csv("vle_results.csv")
+    >>> print(f"Valid rows: {result['n_valid_rows']}/{result['n_rows']}")
+    >>> print(result["summary"])
+    >>>
+    >>> # Format a single row
+    >>> table = Analyzer.format_table(filepath="vle_results.csv", row_index=0)
+    >>> print(table)
+    >>>
+    >>> # Get complete report
+    >>> report = Analyzer.report(filepath="vle_results.csv", row_index=0)
+    >>> print(f"T = {report['T_K']} K, P = {report['P_bar']} bar")
+    >>> print(report["table"])
+    >>>
+    >>> # Manual mode
+    >>> components = ["carbon dioxide", "methane"]
+    >>> z = [0.9, 0.1]
+    >>> x = [0.95, 0.05]
+    >>> y = [0.85, 0.15]
+    >>> validation = Analyzer.validate_sums(z, x, y)
+    >>> print(f"All valid: {validation['all_valid']}")
     """
 
     DEFAULT_DECIMALS = 6
@@ -35,14 +114,43 @@ class Analyzer:
 
     @staticmethod
     def _read_csv(filepath: str) -> pd.DataFrame:
-        """Read CSV file."""
+        """
+        Read CSV file into DataFrame.
+
+        Parameters
+        ----------
+        filepath : str
+            Path to CSV file.
+
+        Returns
+        -------
+        pd.DataFrame
+            Loaded data.
+        """
         return pd.read_csv(filepath)
 
     @staticmethod
     def _detect_components(df: pd.DataFrame) -> List[str]:
         """
-        Auto-detect components from columns like:
-        z_component, x_component, y_component
+        Auto-detect components from column naming convention.
+
+        Looks for columns matching z_component, x_component, y_component
+        and returns components present in all three.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input DataFrame.
+
+        Returns
+        -------
+        List[str]
+            Sorted list of detected component names.
+
+        Raises
+        ------
+        ValueError
+            If no common components found across z_/x_/y_ columns.
         """
         z_components = {col[2:] for col in df.columns if col.startswith("z_")}
         x_components = {col[2:] for col in df.columns if col.startswith("x_")}
@@ -63,7 +171,24 @@ class Analyzer:
         components: Optional[List[str]] = None
     ) -> List[str]:
         """
-        Use user-provided components if given, otherwise auto-detect from CSV.
+        Resolve component list from user input or auto-detection.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input DataFrame.
+        components : List[str], optional
+            User-provided component list. If None, auto-detects.
+
+        Returns
+        -------
+        List[str]
+            Resolved component list.
+
+        Raises
+        ------
+        KeyError
+            If user-provided components are missing required columns.
         """
         if components is None:
             return Analyzer._detect_components(df)
@@ -85,6 +210,19 @@ class Analyzer:
 
     @staticmethod
     def _build_column_names(components: List[str]):
+        """
+        Build column name lists for z, x, y compositions.
+
+        Parameters
+        ----------
+        components : List[str]
+            List of component names.
+
+        Returns
+        -------
+        Tuple[List[str], List[str], List[str]]
+            (z_cols, x_cols, y_cols) column name lists.
+        """
         z_cols = [f"z_{c}" for c in components]
         x_cols = [f"x_{c}" for c in components]
         y_cols = [f"y_{c}" for c in components]
@@ -98,7 +236,35 @@ class Analyzer:
         tol: Optional[float] = None
     ) -> Dict:
         """
-        Validate one composition set (1D arrays) sums to 1.
+        Validate that composition arrays sum to 1.
+
+        Parameters
+        ----------
+        z : array-like
+            Feed composition (1D array).
+        x : array-like
+            Liquid phase composition (1D array).
+        y : array-like
+            Vapor phase composition (1D array).
+        tol : float, optional
+            Tolerance for validation. Defaults to DEFAULT_TOL (1e-6).
+
+        Returns
+        -------
+        Dict
+            Dictionary containing:
+            - z_sum: Sum of z composition
+            - x_sum: Sum of x composition
+            - y_sum: Sum of y composition
+            - all_valid: True if all sums are within tolerance of 1.0
+
+        Example
+        -------
+        >>> z = [0.9, 0.1]
+        >>> x = [0.95, 0.05]
+        >>> y = [0.85, 0.15]
+        >>> result = Analyzer.validate_sums(z, x, y)
+        >>> print(result["all_valid"])  # True
         """
         if tol is None:
             tol = Analyzer.DEFAULT_TOL
@@ -138,17 +304,54 @@ class Analyzer:
         """
         Format one composition row as a compact DataFrame.
 
-        Two modes
-        ---------
-        1) Manual arrays:
-           Analyzer.format_table(components, z, x, y, E)
+        Supports two modes:
+        1. Manual mode: Provide components, z, x, y arrays directly
+        2. CSV mode: Provide filepath and row_index
 
-        2) CSV mode:
-           Analyzer.format_table(filepath="file.csv", row_index=0)
+        Parameters
+        ----------
+        components : List[str], optional
+            Component names (required for manual mode).
+        z : array-like, optional
+            Feed composition (required for manual mode).
+        x : array-like, optional
+            Liquid composition (required for manual mode).
+        y : array-like, optional
+            Vapor composition (required for manual mode).
+        E : array-like, optional
+            Enrichment factors. Defaults to NaN if not provided.
+        decimals : int, optional
+            Decimal places for formatting. Defaults to DEFAULT_DECIMALS.
+        filepath : str, optional
+            Path to CSV file (CSV mode).
+        row_index : int, default 0
+            Row index to extract (CSV mode).
 
-        In CSV mode:
-        - components are auto-detected if not provided
-        - E columns are optional
+        Returns
+        -------
+        pd.DataFrame
+            Formatted table with columns:
+            Component, z (Feed), x (Liquid), y (Vapor), E (Enrichment)
+
+        Raises
+        ------
+        ValueError
+            If neither manual arrays nor filepath provided.
+        IndexError
+            If row_index is out of bounds.
+
+        Example
+        -------
+        >>> # CSV mode
+        >>> table = Analyzer.format_table(filepath="data.csv", row_index=0)
+        >>>
+        >>> # Manual mode
+        >>> table = Analyzer.format_table(
+        ...     components=["CO2", "CH4"],
+        ...     z=[0.9, 0.1],
+        ...     x=[0.95, 0.05],
+        ...     y=[0.85, 0.15]
+        ... )
         """
         if decimals is None:
             decimals = Analyzer.DEFAULT_DECIMALS
@@ -226,9 +429,41 @@ class Analyzer:
         """
         Create a complete report for one composition row.
 
-        Works in:
-        - manual mode
-        - CSV mode
+        Includes formatted table, validation results, and thermodynamic
+        conditions (T, P) if available.
+
+        Parameters
+        ----------
+        components : List[str], optional
+            Component names.
+        z, x, y : array-like, optional
+            Composition arrays.
+        E : array-like, optional
+            Enrichment factors.
+        T_K : float, optional
+            Temperature in Kelvin.
+        P_bar : float, optional
+            Pressure in bar.
+        filepath : str, optional
+            Path to CSV file.
+        row_index : int, default 0
+            Row index to extract.
+
+        Returns
+        -------
+        Dict
+            Dictionary containing:
+            - table: Formatted composition DataFrame
+            - validation: Results from validate_sums()
+            - T_K: Temperature (if available)
+            - P_bar: Pressure (if available)
+
+        Example
+        -------
+        >>> report = Analyzer.report(filepath="data.csv", row_index=5)
+        >>> print(f"T = {report['T_K']} K")
+        >>> print(report["table"])
+        >>> print(f"Valid: {report['validation']['all_valid']}")
         """
         if filepath is not None:
             df = Analyzer._read_csv(filepath)
@@ -281,7 +516,43 @@ class Analyzer:
         """
         Load CSV and validate all rows automatically.
 
-        If components is None, they are auto-detected from the CSV.
+        Performs bulk validation of composition data and provides
+        summary statistics including ranges for T, P, gamma, and E.
+
+        Parameters
+        ----------
+        filepath : str
+            Path to CSV file.
+        components : List[str], optional
+            Component names. If None, auto-detected from columns.
+
+        Returns
+        -------
+        Dict
+            Dictionary containing:
+            - df: Full DataFrame
+            - components: List of component names
+            - valid: Boolean array indicating valid rows
+            - n_rows: Total number of rows
+            - n_valid_rows: Number of valid rows
+            - summary: Dict with detailed statistics including:
+                - components, total_rows, valid_rows, invalid_rows
+                - all_valid, z_sum_range, x_sum_range, y_sum_range
+                - T_range_K, P_range_bar (if columns exist)
+                - gamma_range (if column exists)
+                - E_range, E_range_by_component (if columns exist)
+
+        Example
+        -------
+        >>> result = Analyzer.load_csv("vle_results.csv")
+        >>> print(f"Loaded {result['n_rows']} rows")
+        >>> print(f"Valid: {result['n_valid_rows']}")
+        >>> print(f"T range: {result['summary']['T_range_K']}")
+        >>> print(f"P range: {result['summary']['P_range_bar']}")
+        >>>
+        >>> # Access the full DataFrame
+        >>> df = result["df"]
+        >>> valid_df = df[result["valid"]]
         """
         df = Analyzer._read_csv(filepath)
         components = Analyzer._resolve_components(df, components)
