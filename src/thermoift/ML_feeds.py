@@ -14,9 +14,9 @@ _DEFAULT_TEMPLATES_FILE = _HERE / "IndustrialFeeds.json"
 class FeedsBuilder:
     """Build industrial, random, and systematic CO2-rich mixture feeds."""
 
-    def __init__(self, templates_file=None, rng_type="PCG64"):
+    def __init__(self, templates_file=None, rng_type="PCG64", seed=None):
         """
-        Initialize FeedsBuilder with optional custom templates file and RNG type.
+        Initialize FeedsBuilder with optional custom templates file and RNG.
 
         Parameters
         ----------
@@ -24,30 +24,77 @@ class FeedsBuilder:
             Path to industrial templates JSON file. Defaults to bundled file.
         rng_type : str, default="PCG64"
             Random number generator type: "PCG64", "MT19937", "SFC64", or "Philox"
+        seed : int, optional
+            Random seed for reproducibility. If None, uses system entropy.
         """
         self.templates_file = templates_file or _DEFAULT_TEMPLATES_FILE
         self.templates = None
         self.rng_type = rng_type
+        self.rng = get_rng(seed, rng_type=rng_type)
 
-    def load_industrial_templates(self):
-        """Load industrial feed templates from JSON file."""
-        with open(self.templates_file) as f:
+    def load_industrial_templates(self, templates_file=None):
+        """Load industrial feed templates from JSON file.
+
+        Parameters
+        ----------
+        templates_file : str or Path, optional
+            Path to industrial templates JSON file. If provided, overrides
+            the instance's templates_file. If not provided, uses the
+            instance's templates_file (which defaults to the bundled file).
+        """
+        file_to_load = templates_file if templates_file is not None else self.templates_file
+        with open(file_to_load) as f:
             self.templates = json.load(f)
         return self.templates
 
-    def random_impurity_split(self, n_impurities, total_impurity, n_samples, rng=None):
-        """Generate random impurity splits using Dirichlet distribution."""
-        if not isinstance(rng, np.random.Generator):
-            rng = get_rng(rng, rng_type=self.rng_type)
+    def random_impurity_split(self, n_impurities, total_impurity, n_samples, alpha=1.0):
+        """Generate random impurity splits using Dirichlet distribution.
+
+        Parameters
+        ----------
+        n_impurities : int
+            Number of impurity components.
+        total_impurity : float
+            Total impurity fraction (1 - CO2).
+        n_samples : int
+            Number of samples to generate.
+        alpha : float or array-like, default=1.0
+            Dirichlet concentration parameter(s).
+            - alpha=1.0: uniform distribution over simplex (default)
+            - alpha<1.0: samples concentrate near edges/corners (sparse)
+            - alpha>1.0: samples concentrate near center (dense)
+            Can be a single value (same for all) or array of length n_impurities.
+        """
         if n_impurities == 1:
             return np.full((n_samples, 1), total_impurity)
 
-        samples = rng.dirichlet(alpha=np.ones(n_impurities), size=n_samples)
+        if np.isscalar(alpha):
+            alpha_vec = np.full(n_impurities, alpha)
+        else:
+            alpha_vec = np.asarray(alpha)
+            if len(alpha_vec) != n_impurities:
+                raise ValueError(f"alpha length {len(alpha_vec)} != n_impurities {n_impurities}")
+
+        samples = self.rng.dirichlet(alpha=alpha_vec, size=n_samples)
         return samples * total_impurity
 
     @staticmethod
-    def systematic_impurity_split(n_impurities, total_impurity, step=0.01):
-        """Generate systematic impurity splits at fixed step intervals."""
+    def systematic_impurity_split(n_impurities, total_impurity, step=0.01, min_fraction=0.0):
+        """Generate systematic impurity splits at fixed step intervals.
+
+        Parameters
+        ----------
+        n_impurities : int
+            Number of impurity components.
+        total_impurity : float
+            Total impurity fraction (1 - CO2).
+        step : float, default=0.01
+            Step size for the grid.
+        min_fraction : float, default=0.0
+            Minimum fraction for each impurity. Compositions where any
+            impurity is below this threshold are excluded. Set to e.g. 0.005
+            to ensure each impurity has at least 0.5% of total.
+        """
         if n_impurities == 1:
             return np.array([[total_impurity]])
 
@@ -58,20 +105,23 @@ class FeedsBuilder:
                 f"Choose a step such that total_impurity / step is an integer."
             )
 
+        min_units = int(np.ceil(min_fraction / step)) if min_fraction > 0 else 0
+
         results = []
 
         def generate_compositions(parts, total):
             if parts == 1:
-                yield (total,)
+                if total >= min_units:
+                    yield (total,)
             else:
-                for i in range(total + 1):
+                for i in range(min_units, total - min_units * (parts - 1) + 1):
                     for rest in generate_compositions(parts - 1, total - i):
                         yield (i,) + rest
 
         for comp in generate_compositions(n_impurities, n_units):
             results.append(np.array(comp) * step)
 
-        return np.array(results)
+        return np.array(results) if results else np.empty((0, n_impurities))
 
     def industrial_feeds_from_bounds(
         self,
@@ -79,7 +129,6 @@ class FeedsBuilder:
         co2_levels,
         templates=None,
         n_samples_per_template=20,
-        rng=None,
         co2_name="CO2",
     ):
         """
@@ -109,8 +158,6 @@ class FeedsBuilder:
                 self.load_industrial_templates()
             templates = self.templates
 
-        if not isinstance(rng, np.random.Generator):
-            rng = get_rng(rng, rng_type=self.rng_type)
         rows = []
 
         co2_levels = tuple(x for x in co2_levels if x >= 0.95)
@@ -144,7 +191,7 @@ class FeedsBuilder:
                     remaining = target_non_co2
 
                     # Randomize allocation order for diversity
-                    order = rng.permutation(len(upper))
+                    order = self.rng.permutation(len(upper))
                     feasible = True
 
                     for pos, idx in enumerate(order):
@@ -163,7 +210,7 @@ class FeedsBuilder:
                         if pos == len(order) - 1:
                             value = remaining
                         else:
-                            value = rng.uniform(low, high)
+                            value = self.rng.uniform(low, high)
 
                         split[idx] = value
                         remaining -= value
@@ -199,7 +246,6 @@ class FeedsBuilder:
         components,
         templates=None,
         n_samples_per_template=20,
-        rng=None,
         co2_name="CO2",
         trace_value=1.0e-6,
         max_attempts_per_template=1000,
@@ -242,8 +288,6 @@ class FeedsBuilder:
                 self.load_industrial_templates()
             templates = self.templates
 
-        if not isinstance(rng, np.random.Generator):
-            rng = get_rng(rng, rng_type=self.rng_type)
         rows = []
 
         for template in templates:
@@ -288,7 +332,7 @@ class FeedsBuilder:
                     if low > high:
                         bad_range = True
                         break
-                    sampled[comp] = rng.uniform(low, high) if low < high else low
+                    sampled[comp] = self.rng.uniform(low, high) if low < high else low
 
                 if bad_range:
                     raise ValueError(f"Invalid impurity range in template '{name}'")
@@ -342,9 +386,29 @@ class FeedsBuilder:
         mixture_sizes=(2, 3, 4, 5, 6, 7, 8),
         co2_levels=(0.95, 0.96, 0.97, 0.98, 0.99),
         n_random_samples=100,
-        rng=None,
+        alpha=1.0,
     ):
-        """Generate random feed compositions with specified mixture sizes and CO2 levels."""
+        """Generate random feed compositions with specified mixture sizes and CO2 levels.
+
+        Parameters
+        ----------
+        components : list
+            List of component names (must include co2_name).
+        co2_name : str, default="CO2"
+            Name of the CO2 component.
+        mixture_sizes : tuple, default=(2, 3, 4, 5, 6, 7, 8)
+            Number of components in each mixture (including CO2).
+        co2_levels : tuple, default=(0.95, 0.96, 0.97, 0.98, 0.99)
+            CO2 mole fractions to sample.
+        n_random_samples : int, default=100
+            Number of random samples per combination.
+        alpha : float or dict, default=1.0
+            Dirichlet concentration parameter.
+            - float: same alpha for all impurities (1.0=uniform, <1=sparse, >1=dense)
+            - dict: {component_name: alpha_value} for per-component control
+              e.g., {"H2": 0.5, "N2": 2.0, "CH4": 1.0}
+              Components not in dict default to 1.0
+        """
         if co2_name not in components:
             raise ValueError(f"{co2_name} must be in components")
 
@@ -359,20 +423,26 @@ class FeedsBuilder:
                 continue
 
             for impurity_set in itertools.combinations(impurities_pool, n_impurities):
+                # Build alpha vector for this impurity set
+                if isinstance(alpha, dict):
+                    alpha_vec = np.array([alpha.get(c, 1.0) for c in impurity_set])
+                else:
+                    alpha_vec = alpha
+
                 for x_co2 in co2_levels:
                     total_impurity = 1.0 - x_co2
                     impurity_splits = self.random_impurity_split(
                         n_impurities=n_impurities,
                         total_impurity=total_impurity,
                         n_samples=n_random_samples,
-                        rng=rng,
+                        alpha=alpha_vec,
                     )
 
                     for split in impurity_splits:
                         row = {c: 0.0 for c in components}
                         row["mixture_size"] = mixture_size
                         row["active_components"] = ",".join([co2_name] + list(impurity_set))
-                        row["feed_source"] = "random"
+                        row["feed_source"] = "Random (Dirichlet)"
                         row["template_name"] = "dirichlet"
                         row[co2_name] = x_co2
 
@@ -390,8 +460,27 @@ class FeedsBuilder:
         mixture_sizes=(2, 3, 4),
         co2_levels=(0.95, 0.96, 0.97, 0.98, 0.99),
         step=0.01,
+        min_fraction=0.0,
     ):
-        """Generate systematic feed compositions at fixed step intervals."""
+        """Generate systematic feed compositions at fixed step intervals.
+
+        Parameters
+        ----------
+        components : list
+            List of component names (must include co2_name).
+        co2_name : str, default="CO2"
+            Name of the CO2 component.
+        mixture_sizes : tuple, default=(2, 3, 4)
+            Number of components in each mixture (including CO2).
+        co2_levels : tuple, default=(0.95, 0.96, 0.97, 0.98, 0.99)
+            CO2 mole fractions to sample.
+        step : float, default=0.01
+            Step size for the grid (1% = 0.01).
+        min_fraction : float, default=0.0
+            Minimum fraction for each impurity. Set to e.g. 0.005 to ensure
+            each active impurity has at least 0.5%. This removes extreme
+            compositions where one impurity dominates.
+        """
         if co2_name not in components:
             raise ValueError(f"{co2_name} must be in components")
 
@@ -412,13 +501,17 @@ class FeedsBuilder:
                         n_impurities=n_impurities,
                         total_impurity=total_impurity,
                         step=step,
+                        min_fraction=min_fraction,
                     )
+
+                    if len(impurity_splits) == 0:
+                        continue
 
                     for split in impurity_splits:
                         row = {c: 0.0 for c in components}
                         row["mixture_size"] = mixture_size
                         row["active_components"] = ",".join([co2_name] + list(impurity_set))
-                        row["feed_source"] = "systematic"
+                        row["feed_source"] = "Systematic"
                         row["template_name"] = "systematic_grid"
                         row[co2_name] = x_co2
 
@@ -434,16 +527,39 @@ class FeedsBuilder:
         components,
         n_total_target=10000,
         co2_levels=(0.95, 0.96, 0.97, 0.98, 0.99),
-        rng=42,
+        frac_random=0.70,
+        frac_systematic=0.20,
+        frac_industrial=0.10,
     ):
         """
-        Build a combined dataset with approximately:
-          70% random
-          20% systematic
-          10% industrial
+        Build a combined dataset with specified fractions.
+
+        Parameters
+        ----------
+        components : list
+            List of component names.
+        n_total_target : int, default=10000
+            Target total number of feeds.
+        co2_levels : tuple, default=(0.95, 0.96, 0.97, 0.98, 0.99)
+            CO2 mole fractions to sample.
+        frac_random : float, default=0.70
+            Fraction of random feeds (0-1).
+        frac_systematic : float, default=0.20
+            Fraction of systematic feeds (0-1).
+        frac_industrial : float, default=0.10
+            Fraction of industrial feeds (0-1).
+
+        Note: fractions should sum to 1.0. If they don't, they will be normalized.
         """
-        n_random_target = int(0.70 * n_total_target)
-        n_systematic_target = int(0.20 * n_total_target)
+        # Normalize fractions
+        total_frac = frac_random + frac_systematic + frac_industrial
+        if not np.isclose(total_frac, 1.0, atol=1e-6):
+            frac_random /= total_frac
+            frac_systematic /= total_frac
+            frac_industrial /= total_frac
+
+        n_random_target = int(frac_random * n_total_target)
+        n_systematic_target = int(frac_systematic * n_total_target)
         n_industrial_target = n_total_target - n_random_target - n_systematic_target
 
         # --- random pool ---
@@ -452,7 +568,6 @@ class FeedsBuilder:
             mixture_sizes=(2, 3, 4, 5, 6, 7, 8),
             co2_levels=co2_levels,
             n_random_samples=20,
-            rng=rng,
         )
 
         # --- systematic pool ---
@@ -471,22 +586,18 @@ class FeedsBuilder:
             components=components,
             co2_levels=co2_levels,
             templates=self.templates,
-            rng=rng,
         )
         df_ind_ranges = self.industrial_feeds_from_ranges(
             components=components,
             templates=self.templates,
-            rng=rng,
         )
         df_industrial_pool = pd.concat([df_ind_bounds, df_ind_ranges], ignore_index=True)
 
         # sample from each pool
-        rng_obj = get_rng(rng, rng_type=self.rng_type) if not isinstance(rng, np.random.Generator) else rng
-
         def sample_df(df, n):
             if len(df) <= n:
                 return df.copy()
-            idx = rng_obj.choice(df.index, size=n, replace=False)
+            idx = self.rng.choice(df.index, size=n, replace=False)
             return df.loc[idx].copy()
 
         df_random = sample_df(df_random_pool, n_random_target)
@@ -496,7 +607,7 @@ class FeedsBuilder:
         if len(df_industrial_pool) == 0:
             df_industrial = df_industrial_pool.copy()
         elif len(df_industrial_pool) < n_industrial_target:
-            idx = rng_obj.choice(df_industrial_pool.index, size=n_industrial_target, replace=True)
+            idx = self.rng.choice(df_industrial_pool.index, size=n_industrial_target, replace=True)
             df_industrial = df_industrial_pool.loc[idx].copy().reset_index(drop=True)
         else:
             df_industrial = sample_df(df_industrial_pool, n_industrial_target)
@@ -510,7 +621,7 @@ class FeedsBuilder:
 
 
 if __name__ == "__main__":
-    
+
     from .rng_utils import describe_rngs
 
     components = ["CO2", "N2", "O2", "Ar", "CH4", "H2", "CO", "H2S", "SO2", "NO", "NO2"]
@@ -521,12 +632,11 @@ if __name__ == "__main__":
 
     # Example 1: Using default PCG64
     print("Generating feeds with PCG64 (default)...")
-    builder_pcg = FeedsBuilder(rng_type="PCG64")
+    builder_pcg = FeedsBuilder(rng_type="PCG64", seed=42)
     df_pcg = builder_pcg.combine_feeds_random_systematic_industrial(
         components=components,
         n_total_target=5000,
         co2_levels=(0.95, 0.96, 0.97, 0.98, 0.99),
-        rng=42,
     )
     print(f"Generated {len(df_pcg)} feeds")
     print(df_pcg.head())
@@ -535,12 +645,11 @@ if __name__ == "__main__":
 
     # Example 2: Using MT19937 (Mersenne Twister)
     print("Generating feeds with MT19937...")
-    builder_mt = FeedsBuilder(rng_type="MT19937")
+    builder_mt = FeedsBuilder(rng_type="MT19937", seed=42)
     df_mt = builder_mt.combine_feeds_random_systematic_industrial(
         components=components,
         n_total_target=5000,
         co2_levels=(0.95, 0.96, 0.97, 0.98, 0.99),
-        rng=42,
     )
     print(f"Generated {len(df_mt)} feeds with MT19937")
     df_mt.to_csv("co2_rich_mixed_strategy_feeds_mt19937.csv", index=False)
