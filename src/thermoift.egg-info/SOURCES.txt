@@ -4,6 +4,8 @@ src/old_src/FeosPlugin_V2.py
 src/thermoift/Analyzer.py
 src/thermoift/FeosPlugin.py
 src/thermoift/ML_feeds.py
+src/thermoift/ML_postprocessing.py
+src/thermoift/ML_preprocessing.py
 src/thermoift/PLOT_SETTINGS.py
 src/thermoift/__init__.py
 src/thermoift/rng_utils.py

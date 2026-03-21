@@ -69,14 +69,14 @@ class semi_emperical_correlations:
 
     def __init__(
         self,
-        n_grid: int = 1024,
-        l_grid: float = 100.0,
+        n_grid: int     = 1024,
+        l_grid: float   = 100.0,
     ) -> None:
 
         self._parameters_fn = PARAMETERS
-        self._density_fn = molar_density_mol_m3
-        self._n_grid = n_grid
-        self._l_grid = l_grid
+        self._density_fn    = molar_density_mol_m3
+        self._n_grid        = n_grid
+        self._l_grid            = l_grid
 
         self.component_names: list[str] | None = None
         self.T_K_cached: float | None = None
@@ -85,6 +85,7 @@ class semi_emperical_correlations:
         self.rhoV0: np.ndarray | None = None
         self.Psat: np.ndarray | None = None
         self.Tc: np.ndarray | None = None
+        self.Pc: np.ndarray | None = None
 
     # ------------------------------------------------------------------
     # Pure-component DFT (single component)
@@ -94,7 +95,7 @@ class semi_emperical_correlations:
         self,
         component_name: str,
         T_K: float,
-    ) -> tuple[float, float, float, float, float]:
+    ) -> tuple[float, float, float, float, float, float]:
         """
         Run a PC-SAFT EoS + planar cDFT solve for one pure component.
 
@@ -115,57 +116,59 @@ class semi_emperical_correlations:
             Vapour density [mol/cm3]. NaN if SC.
         Tc_K : float
             PC-SAFT critical temperature [K].
+        Pc_bar : float
+            PC-SAFT critical pressure [bar].
         Psat : float
             Saturation pressure [bar]. NaN if SC.
         """
 
-        params = self._parameters_fn([component_name])
-        eos = feos.HelmholtzEnergyFunctional.pcsaft(params)
+        params  = self._parameters_fn([component_name])
+        eos     = feos.HelmholtzEnergyFunctional.pcsaft(params)
 
-        cp = feos.State.critical_point(eos)
-        Tc_K = float(cp.temperature / si.KELVIN)
+        cp      = feos.State.critical_point(eos)
+        Tc_K    = float(cp.temperature / si.KELVIN)
+        Pc_bar  = float(cp.pressure() / si.BAR)
 
         if T_K >= Tc_K:
-            return np.nan, np.nan, np.nan, Tc_K, np.nan
+            return np.nan, np.nan, np.nan, Tc_K, Pc_bar, np.nan
 
         try:
             vle = feos.PhaseEquilibrium.pure(eos, T_K * si.KELVIN)
 
         except Exception as exc:
             warnings.warn(
-                f"From semi_emperical_correlations: cDFT (planar-interface failed for the pure component) "
-                f"'{component_name}' at T={T_K} K: {exc}"
+                f"cDFT (planar-interface) failed for pure component '{component_name}' at T={T_K} K: {exc} (From semi_emperical_correlations)"
             )
-            return np.nan, np.nan, np.nan, Tc_K, np.nan
+            return np.nan, np.nan, np.nan, Tc_K, Pc_bar, np.nan
 
-        rhoL0 = self._density_fn(vle.liquid.density) * 1e-6
-        rhoV0 = self._density_fn(vle.vapor.density) * 1e-6
-        Psat = float(vle.liquid.pressure() / si.BAR)
+        rhoL0   = self._density_fn(vle.liquid.density) * 1e-6
+        rhoV0   = self._density_fn(vle.vapor.density) * 1e-6
+        Psat    = float(vle.liquid.pressure() / si.BAR)
 
         try:
-            interface = feos.PlanarInterface.from_tanh(
-                vle=vle,
-                n_grid=self._n_grid,
-                l_grid=self._l_grid * si.ANGSTROM,
-                critical_temperature=cp.temperature,
-            )
-            sol = interface.solve()
-            gamma0 = float(sol.surface_tension * 1e3 / si.NEWTON * si.METER)
+            interface   = feos.PlanarInterface.from_tanh(
+                vle     =vle,
+                n_grid  =self._n_grid,
+                l_grid  =self._l_grid * si.ANGSTROM,
+                critical_temperature=cp.temperature)
+            
+            sol     = interface.solve()
+            gamma0  = float(sol.surface_tension * 1e3 / si.NEWTON * si.METER)
 
         except Exception as exc:
             warnings.warn(
-                f"From semi_emperical_correlations: cDFT solve failed for '{component_name}' "
+                f"cDFT solve failed for pure component '{component_name} (From semi_emperical_correlations)' "
                 f"at T={T_K} K: {exc}"
             )
-            return np.nan, rhoL0, rhoV0, Tc_K, Psat
+            return np.nan, rhoL0, rhoV0, Tc_K, Pc_bar, np.nan
 
-        return gamma0, rhoL0, rhoV0, Tc_K, Psat
+        return gamma0, rhoL0, rhoV0, Tc_K, Pc_bar, Psat
 
     def batch_pure_component_cDFT(
         self,
         component_names: list[str],
         T_K: float,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Compute and cache pure-component IFT and saturation densities for a list
         of components at a given temperature.
@@ -187,6 +190,8 @@ class semi_emperical_correlations:
             Vapour densities [mol/cm3], shape (N,).
         Tc_arr : np.ndarray
             Critical temperatures [K], shape (N,).
+        Pc_arr : np.ndarray
+            Critical pressures [bar], shape (N,).
         Psat_arr : np.ndarray
             Saturation pressures [bar], shape (N,).
         """
@@ -196,10 +201,11 @@ class semi_emperical_correlations:
         rhoL0_arr = np.full(N, np.nan)
         rhoV0_arr = np.full(N, np.nan)
         Tc_arr = np.full(N, np.nan)
+        Pc_arr = np.full(N, np.nan)
         Psat_arr = np.full(N, np.nan)
 
         for i, name in enumerate(component_names):
-            gamma0_arr[i], rhoL0_arr[i], rhoV0_arr[i], Tc_arr[i], Psat_arr[i] = (
+            gamma0_arr[i], rhoL0_arr[i], rhoV0_arr[i], Tc_arr[i], Pc_arr[i], Psat_arr[i] = (
                 self._pure_component_cDFT(name, T_K)
             )
 
@@ -209,9 +215,10 @@ class semi_emperical_correlations:
         self.rhoL0 = rhoL0_arr
         self.rhoV0 = rhoV0_arr
         self.Tc = Tc_arr
+        self.Pc = Pc_arr
         self.Psat = Psat_arr
 
-        return gamma0_arr, rhoL0_arr, rhoV0_arr, Tc_arr, Psat_arr
+        return gamma0_arr, rhoL0_arr, rhoV0_arr, Tc_arr, Pc_arr, Psat_arr
 
     # ---------------------------------------------------------------------------
     # Parachor method
@@ -522,6 +529,7 @@ class semi_emperical_correlations:
                 "rhoV0",
                 "Psat0",
                 "Tc",
+                "Pc",
             )
         }
 
@@ -619,6 +627,7 @@ class semi_emperical_correlations:
                 data["rhoV0"].append(self.rhoV0.copy())
                 data["Psat0"].append(self.Psat.copy())
                 data["Tc"].append(self.Tc.copy())
+                data["Pc"].append(self.Pc.copy())
 
         return data
 
@@ -644,6 +653,7 @@ class semi_emperical_correlations:
             rows[f"rhoV0_{name}"] = [v[i] for v in data["rhoV0"]]
             rows[f"Psat0_{name}"] = [v[i] for v in data["Psat0"]]
             rows[f"Tc_{name}"] = [v[i] for v in data["Tc"]]
+            rows[f"Pc_{name}"] = [v[i] for v in data["Pc"]]
 
         return pd.DataFrame(rows)
 
