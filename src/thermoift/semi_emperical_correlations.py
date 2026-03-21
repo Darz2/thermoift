@@ -3,6 +3,7 @@
 # Created by Darshan on 2025-03-15
 # UPDATE: 2025-03-15 by Darshan (Added the Parachor, WSD, RK model)
 # UPDATE: 2025-03-17 by Darshan (Added the PT colormap plotting function, saturation pressure functionality)
+# UPDATE: 2025-03-18 by Darshan (Added the critical pressure functionality, added more error handling and warnings)
 # TODO :  2025-03-15 Test and make the examples
 # TODO :  2025-03-15 Add the PT colormap plotting and compute the with semi-emperical correlations.
 
