@@ -226,6 +226,111 @@ class semi_emperical_correlations:
     # ---------------------------------------------------------------------------
 
     @staticmethod
+    def parachor_number(
+        rho_l: float,
+        rho_v: float,
+        gamma: float,
+        n_exp: float = 3.87,
+    ) -> float:
+        """
+        Calculate the parachor number for a pure component.
+
+        The parachor number P is defined such that:
+            gamma^(1/n) = P * (rho_l - rho_v)
+
+        Rearranging:
+            P = gamma^(1/n) / (rho_l - rho_v)
+
+        Parameters
+        ----------
+        rho_l : float
+            Saturated liquid molar density [mol/cm3].
+        rho_v : float
+            Saturated vapour molar density [mol/cm3].
+        gamma : float
+            Pure-component interfacial tension [mN/m].
+        n_exp : float, optional
+            Parachor exponent (default 3.87, REFPROP v10).
+
+        Returns
+        -------
+        parachor : float
+            Parachor number [(mN/m)^(1/n) / (mol/cm3)].
+
+        Raises
+        ------
+        ValueError
+            If any input is non-positive or if rho_l <= rho_v.
+        """
+        if rho_l <= 0 or rho_v < 0 or gamma <= 0:
+            raise ValueError("rho_l, gamma must be positive; rho_v must be non-negative.")
+
+        delta_rho = rho_l - rho_v
+        if delta_rho <= 0:
+            raise ValueError("rho_l must be greater than rho_v.")
+
+        parachor = gamma ** (1.0 / n_exp) / delta_rho
+        return parachor
+
+    def batch_parachor_numbers(
+        self,
+        component_names: list[str],
+        T_K: float,
+        n_exp: float = 3.87,
+        verbose: bool = True,
+    ) -> np.ndarray:
+        """
+        Compute parachor numbers for multiple components at a given temperature.
+
+        For components where T_K > Tc (supercritical), the method automatically
+        uses a reference temperature T_ref = 0.9 * Tc to compute a valid
+        parachor number.
+
+        Parameters
+        ----------
+        component_names : list[str]
+            List of component names accepted by FeosPlugin.PARAMETERS.
+        T_K : float
+            Temperature [K].
+        n_exp : float, optional
+            Parachor exponent (default 3.87, REFPROP v10).
+        verbose : bool, optional
+            If True, print info about each component (default True).
+
+        Returns
+        -------
+        parachor_numbers : np.ndarray
+            Array of parachor numbers, shape (N,).
+        """
+        # Get pure-component data at T_K
+        gamma0, rhoL0, rhoV0, Tc0, Pc0, Psat0 = self.batch_pure_component_cDFT(
+            component_names, T_K
+        )
+
+        parachor_numbers = []
+        for i, comp in enumerate(component_names):
+            if np.isnan(gamma0[i]):
+                # Component is supercritical at T_K, use T = 0.9*Tc instead
+                # Use _pure_component_cDFT directly to avoid overwriting cached arrays
+                T_ref = 0.9 * Tc0[i]
+                gamma_ref, rhoL_ref, rhoV_ref, _, _, _ = self._pure_component_cDFT(
+                    comp, T_ref
+                )
+                P_i = self.parachor_number(rhoL_ref, rhoV_ref, gamma_ref, n_exp)
+                if verbose:
+                    print(
+                        f"{comp}: T_K={T_K:.2f} > Tc={Tc0[i]:.2f}, "
+                        f"using T_ref={T_ref:.2f} K -> Parachor = {P_i:.4f}"
+                    )
+            else:
+                P_i = self.parachor_number(rhoL0[i], rhoV0[i], gamma0[i], n_exp)
+                if verbose:
+                    print(f"{comp}: Parachor = {P_i:.4f}")
+            parachor_numbers.append(P_i)
+
+        return np.array(parachor_numbers, dtype=float)
+
+    @staticmethod
     def parachor_mixture_IFT(
         x: np.ndarray,
         y: np.ndarray,
