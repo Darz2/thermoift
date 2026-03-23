@@ -4,8 +4,9 @@
 # UPDATE: 2025-03-15 by Darshan (Added the Parachor, WSD, RK model)
 # UPDATE: 2025-03-17 by Darshan (Added the PT colormap plotting function, saturation pressure functionality)
 # UPDATE: 2025-03-18 by Darshan (Added the critical pressure functionality, added more error handling and warnings)
-# TODO :  2025-03-15 Test and make the examples
-# TODO :  2025-03-15 Add the PT colormap plotting and compute the with semi-emperical correlations.
+# UPDATE: 2025-03-23 by Darshan (Test and made the examples to compute the interfacial tension of the semi emperical models)
+# UPDATE: 2025-03-23 by Darshan (Add the PT colormap plotting and compute the with semi-emperical correlations).
+# TODO: (Add the functinality to compute at the saturation line both in the SEC and in the FEOS Plugin to compute the metastable limits)
 
 """
 semi-emperical_correlations.py
@@ -601,18 +602,26 @@ class semi_emperical_correlations:
         method: str = "parachor",
         n_T: int = 30,
         n_P: int = 30,
+        recompute_parachor: bool = True,
     ) -> dict:
         """
         Sweep a (T, P) grid inside the two-phase envelope, run a TP flash at
         each point, and compute mixture IFT using the chosen semi-empirical method.
+
+        Parameters
+        ----------
+        recompute_parachor : bool, optional
+            If True (default), recompute parachor numbers at each temperature
+            using batch_parachor_numbers. If False, use the fixed parachor_numbers
+            array for all temperatures.
         """
         method = method.lower().strip()
 
         if method not in ("parachor", "wsd", "rk"):
             raise ValueError(f"method must be 'parachor', 'wsd', or 'rk'; got '{method}'.")
 
-        if method == "parachor" and parachor_numbers is None:
-            raise ValueError("parachor_numbers must be provided when method='parachor'.")
+        if method == "parachor" and parachor_numbers is None and not recompute_parachor:
+            raise ValueError("parachor_numbers must be provided when method='parachor' and recompute_parachor=False.")
 
         if method == "rk" and rk_coeffs is None:
             raise ValueError("rk_coeffs must be provided when method='rk'.")
@@ -636,6 +645,7 @@ class semi_emperical_correlations:
                 "Psat0",
                 "Tc",
                 "Pc",
+                "parachor",
             )
         }
 
@@ -643,6 +653,7 @@ class semi_emperical_correlations:
         T_dew_arr, P_dew_arr = zip(*sorted(zip(T_dew, P_dew)))
         T_range = np.linspace(min(T_bub), max(T_bub) * 0.999, n_T)
         _cached_T = None
+        _current_parachor = parachor_numbers  # start with user-supplied or None
 
         for T_K in T_range:
 
@@ -657,6 +668,11 @@ class semi_emperical_correlations:
             if T_K != _cached_T:
                 try:
                     self.batch_pure_component_cDFT(component_names, T_K)
+                    # Recompute parachor numbers at this temperature if requested
+                    if method == "parachor" and recompute_parachor:
+                        _current_parachor = self.batch_parachor_numbers(
+                            component_names, T_K, n_exp=n_exp, verbose=False
+                        )
                     _cached_T = T_K
                 except Exception as exc:
                     warnings.warn(
@@ -689,7 +705,7 @@ class semi_emperical_correlations:
                             y,
                             rho_l,
                             rho_v,
-                            parachor_numbers=parachor_numbers,
+                            parachor_numbers=_current_parachor,
                             kij=kij_parachor,
                             n_exp=n_exp,
                         )
@@ -734,6 +750,7 @@ class semi_emperical_correlations:
                 data["Psat0"].append(self.Psat.copy())
                 data["Tc"].append(self.Tc.copy())
                 data["Pc"].append(self.Pc.copy())
+                data["parachor"].append(_current_parachor.copy() if _current_parachor is not None else None)
 
         return data
 
@@ -760,6 +777,7 @@ class semi_emperical_correlations:
             rows[f"Psat0_{name}"] = [v[i] for v in data["Psat0"]]
             rows[f"Tc_{name}"] = [v[i] for v in data["Tc"]]
             rows[f"Pc_{name}"] = [v[i] for v in data["Pc"]]
+            rows[f"parachor_{name}"] = [v[i] if v is not None else None for v in data["parachor"]]
 
         return pd.DataFrame(rows)
 
