@@ -7,8 +7,8 @@
 # UPDATE: 2025-03-23 by Darshan (Test and made the examples to compute the interfacial tension of the semi emperical models)
 # UPDATE: 2025-03-23 by Darshan (Add the PT colormap plotting and compute the with semi-emperical correlations).
 # UPDATE: 2026-03-24 by Darshan (Added compute_saturation_line_IFT for IFT along bubble/dew curves only)
+# TODO: Add the functinality of compute_saturation_line_IFT in the FEOS Plugin to compare
 # TODO: Add the IFT from the Pxy diagram for the binary mixtures (Validation)
-# TODO: Add the functinality of compute_saturation_line_IFT in the FEOS Plugin to compare 
 # TODO: Add the metastable limits from the CNT from the old parachorpy package
 
 """
