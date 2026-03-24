@@ -6,7 +6,9 @@
 # UPDATE: 2025-03-18 by Darshan (Added the critical pressure functionality, added more error handling and warnings)
 # UPDATE: 2025-03-23 by Darshan (Test and made the examples to compute the interfacial tension of the semi emperical models)
 # UPDATE: 2025-03-23 by Darshan (Add the PT colormap plotting and compute the with semi-emperical correlations).
-# TODO: (Add the functinality to compute at the saturation line both in the SEC and in the FEOS Plugin to compute the metastable limits)
+# UPDATE: 2026-03-24 by Darshan (Added compute_saturation_line_IFT for IFT along bubble/dew curves only)
+# TODO: Add the functinality of compute_saturation_line_IFT in the FEOS Plugin to compare 
+# TODO: Add the metastable limits from the CNT from the old parachorpy package
 
 """
 semi-emperical_correlations.py
@@ -44,12 +46,17 @@ class semi_emperical_correlations:
     Pure-component Interfacial tension and saturation densities are computed from the
     PC-SAFT EoS + cDFT (planar interface).
 
+    This class provides three semi-empirical methods for computing mixture IFT:
+    - **Parachor**: Uses parachor numbers and phase densities
+    - **WSD**: Winterfeld-Scriven-Davis method using pure-component IFTs
+    - **RK**: Redlich-Kister polynomial expansion
+
     Parameters
     ----------
-    n_grid : int
-        Number of DFT grid points for the planar-interface solve (default 1024).
-    l_grid : float
-        cDFT domain length [A] (default 100 A).
+    n_grid : int, optional
+        Number of DFT grid points for the planar-interface solve. Default is 1024.
+    l_grid : float, optional
+        cDFT domain length in Angstroms. Default is 100.0 A.
 
     Attributes
     ----------
@@ -67,6 +74,14 @@ class semi_emperical_correlations:
         Cached pure saturation pressures [bar], shape (N,).
     Tc : np.ndarray or None
         Cached PC-SAFT critical temperatures [K], shape (N,).
+    Pc : np.ndarray or None
+        Cached PC-SAFT critical pressures [bar], shape (N,).
+
+    Examples
+    --------
+    >>> sec = semi_emperical_correlations(n_grid=1024, l_grid=100.0)
+    >>> sec.batch_pure_component_cDFT(["methane", "ethane"], T_K=300.0)
+    >>> parachors = sec.batch_parachor_numbers(["methane", "ethane"], T_K=300.0)
     """
 
     def __init__(
@@ -211,6 +226,94 @@ class semi_emperical_correlations:
                 self._pure_component_cDFT(name, T_K)
             )
 
+        self.component_names = list(component_names)
+        self.T_K_cached = T_K
+        self.gamma0 = gamma0_arr
+        self.rhoL0 = rhoL0_arr
+        self.rhoV0 = rhoV0_arr
+        self.Tc = Tc_arr
+        self.Pc = Pc_arr
+        self.Psat = Psat_arr
+
+        return gamma0_arr, rhoL0_arr, rhoV0_arr, Tc_arr, Pc_arr, Psat_arr
+
+    def batch_pure_component_VLE(
+        self,
+        component_names: list[str],
+        T_K: float,
+        gamma0_ref: np.ndarray | None = None,
+        scaling_exp: float = 1.26,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Fast pure-component VLE calculation WITHOUT cDFT.
+
+        Uses pure VLE for density data and a scaling correlation for gamma0:
+            gamma0(T) = gamma0_ref * (1 - T/Tc)^scaling_exp
+
+        This is ~100x faster than batch_pure_component_cDFT because it skips
+        the expensive PlanarInterface DFT solve.
+
+        Parameters
+        ----------
+        component_names : list[str]
+            List of component names.
+        T_K : float
+            Temperature [K].
+        gamma0_ref : np.ndarray or None
+            Reference pure IFT values [mN/m] at some reference state (typically
+            computed once via cDFT at a low Tr). If None, uses Brock-Bird correlation.
+        scaling_exp : float
+            Exponent for the (1 - Tr)^n scaling. Default 1.26 (van der Waals).
+            Use 11/9 ≈ 1.222 for Brock-Bird.
+
+        Returns
+        -------
+        Same as batch_pure_component_cDFT.
+        """
+        N = len(component_names)
+        gamma0_arr = np.full(N, np.nan)
+        rhoL0_arr = np.full(N, np.nan)
+        rhoV0_arr = np.full(N, np.nan)
+        Tc_arr = np.full(N, np.nan)
+        Pc_arr = np.full(N, np.nan)
+        Psat_arr = np.full(N, np.nan)
+
+        for i, name in enumerate(component_names):
+            params = self._parameters_fn([name])
+            eos = feos.HelmholtzEnergyFunctional.pcsaft(params)
+
+            # Critical point (fast)
+            cp = feos.State.critical_point(eos)
+            Tc_K = float(cp.temperature / si.KELVIN)
+            Pc_bar = float(cp.pressure() / si.BAR)
+            Tc_arr[i] = Tc_K
+            Pc_arr[i] = Pc_bar
+
+            if T_K >= Tc_K:
+                # Supercritical - no VLE
+                continue
+
+            # Pure VLE (fast - no cDFT)
+            try:
+                vle = feos.PhaseEquilibrium.pure(eos, T_K * si.KELVIN)
+                rhoL0_arr[i] = self._density_fn(vle.liquid.density) * 1e-6
+                rhoV0_arr[i] = self._density_fn(vle.vapor.density) * 1e-6
+                Psat_arr[i] = float(vle.liquid.pressure() / si.BAR)
+            except Exception:
+                continue
+
+            # Estimate gamma0 using scaling correlation
+            Tr = T_K / Tc_K
+            if gamma0_ref is not None and i < len(gamma0_ref) and not np.isnan(gamma0_ref[i]):
+                # Use provided reference value with scaling
+                gamma0_arr[i] = gamma0_ref[i] * (1.0 - Tr) ** scaling_exp
+            else:
+                # Brock-Bird correlation (no reference needed)
+                # gamma0 ≈ 0.073 * Pc^(2/3) * Tc^(1/3) * (1 - Tr)^1.26
+                # Pc in bar -> convert to mN/m units
+                gamma0_arr[i] = 0.073 * (Pc_bar * 0.1) ** (2/3) * Tc_K ** (1/3) * (1.0 - Tr) ** scaling_exp
+
+        # Cache results
         self.component_names = list(component_names)
         self.T_K_cached = T_K
         self.gamma0 = gamma0_arr
@@ -610,10 +713,80 @@ class semi_emperical_correlations:
 
         Parameters
         ----------
+        component_names : list[str]
+            Names of the components in the mixture (e.g., ["methane", "ethane"]).
+            Must match parameter file entries.
+        feed_z : np.ndarray
+            Overall feed composition as mole fractions, shape (N,). Must sum to 1.0.
+        eos : feos.EquationOfState
+            The equation of state object (e.g., PC-SAFT) used for TP flash calculations.
+        T_bub : list[float]
+            Bubble-point temperatures [K] defining the phase envelope boundary.
+        P_bub : list[float]
+            Bubble-point pressures [bar] corresponding to T_bub.
+        T_dew : list[float]
+            Dew-point temperatures [K] defining the phase envelope boundary.
+        P_dew : list[float]
+            Dew-point pressures [bar] corresponding to T_dew.
+        parachor_numbers : np.ndarray or None, optional
+            Parachor numbers for each component, shape (N,). Required when
+            method='parachor' and recompute_parachor=False. Default is None.
+        kij_parachor : float, optional
+            Binary interaction parameter for the parachor mixing rule. Default is 0.0.
+        n_exp : float, optional
+            Exponent in the parachor IFT equation. Default is 3.87.
+        phi_wsd : float, optional
+            Correction factor (phi) for the WSD method. Default is 1.0.
+        wsd_correction : bool, optional
+            Whether to apply correction in the WSD method. Default is True.
+        rk_coeffs : np.ndarray or None, optional
+            Redlich-Kister coefficients for the RK method. Required when method='rk'.
+            Default is None.
+        method : str, optional
+            Semi-empirical method to use. Options are:
+            - 'parachor': Parachor-based correlation (default)
+            - 'wsd': Winterfeld-Scriven-Davis method
+            - 'rk': Redlich-Kister polynomial expansion
+        n_T : int, optional
+            Number of temperature grid points in the sweep. Default is 30.
+        n_P : int, optional
+            Number of pressure grid points at each temperature. Default is 30.
         recompute_parachor : bool, optional
             If True (default), recompute parachor numbers at each temperature
             using batch_parachor_numbers. If False, use the fixed parachor_numbers
             array for all temperatures.
+
+        Returns
+        -------
+        dict
+            Dictionary containing arrays of results with keys:
+            - 'T': Temperature [K]
+            - 'P': Pressure [bar]
+            - 'gamma': Computed mixture IFT [mN/m]
+            - 'rho_l': Liquid phase density [mol/cm3]
+            - 'rho_v': Vapor phase density [mol/cm3]
+            - 'x': Liquid mole fractions, shape (N,)
+            - 'y': Vapor mole fractions, shape (N,)
+            - 'gamma0': Pure component IFTs [mN/m]
+            - 'rhoL0': Pure liquid densities [mol/cm3]
+            - 'rhoV0': Pure vapor densities [mol/cm3]
+            - 'Psat0': Pure saturation pressures [bar]
+            - 'Tc': Critical temperatures [K]
+            - 'Pc': Critical pressures [bar]
+            - 'parachor': Parachor numbers used (or None)
+
+        Raises
+        ------
+        ValueError
+            If method is not one of 'parachor', 'wsd', or 'rk'.
+            If parachor_numbers is None when method='parachor' and recompute_parachor=False.
+            If rk_coeffs is None when method='rk'.
+
+        Notes
+        -----
+        - The grid is constructed between the bubble and dew curves.
+        - Points outside the two-phase region or where flash fails are skipped.
+        - Warnings are issued for individual point failures without stopping the sweep.
         """
         method = method.lower().strip()
 
@@ -753,6 +926,330 @@ class semi_emperical_correlations:
                 data["parachor"].append(_current_parachor.copy() if _current_parachor is not None else None)
 
         return data
+
+    # ---------------------------------------------------------------------------
+    # Saturation line IFT - compute gamma only at bubble and dew points
+    # ---------------------------------------------------------------------------
+
+    def compute_saturation_line_IFT(
+        self,
+        component_names: list[str],
+        feed_z: np.ndarray,
+        eos,
+        T_bub: list[float],
+        P_bub: list[float],
+        T_dew: list[float],
+        P_dew: list[float],
+        parachor_numbers: np.ndarray | None = None,
+        kij_parachor: float = 0.0,
+        n_exp: float = 3.87,
+        phi_wsd: float = 1.0,
+        wsd_correction: bool = True,
+        rk_coeffs: np.ndarray | None = None,
+        method: str = "parachor",
+        recompute_parachor: bool = True,
+        line: str = "both",
+        n_points: int | None = None,
+        P_offset_frac: float = 0.005,
+    ) -> dict:
+        """
+        Compute mixture IFT only along the saturation lines (bubble and/or dew curves).
+
+        Unlike compute_PT_colormap_data which sweeps the entire two-phase region,
+        this function computes IFT only at the (T, P) points on the phase envelope.
+
+        Parameters
+        ----------
+        component_names : list[str]
+            Names of the components in the mixture (e.g., ["methane", "ethane"]).
+        feed_z : np.ndarray
+            Overall feed composition as mole fractions, shape (N,). Must sum to 1.0.
+        eos : feos.EquationOfState
+            The equation of state object (e.g., PC-SAFT) used for TP flash calculations.
+        T_bub : list[float]
+            Bubble-point temperatures [K] defining the bubble curve.
+        P_bub : list[float]
+            Bubble-point pressures [bar] corresponding to T_bub.
+        T_dew : list[float]
+            Dew-point temperatures [K] defining the dew curve.
+        P_dew : list[float]
+            Dew-point pressures [bar] corresponding to T_dew.
+        parachor_numbers : np.ndarray or None, optional
+            Parachor numbers for each component, shape (N,). Required when
+            method='parachor' and recompute_parachor=False. Default is None.
+        kij_parachor : float, optional
+            Binary interaction parameter for the parachor mixing rule. Default is 0.0.
+        n_exp : float, optional
+            Exponent in the parachor IFT equation. Default is 3.87.
+        phi_wsd : float, optional
+            Correction factor (phi) for the WSD method. Default is 1.0.
+        wsd_correction : bool, optional
+            Whether to apply correction in the WSD method. Default is True.
+        rk_coeffs : np.ndarray or None, optional
+            Redlich-Kister coefficients for the RK method. Required when method='rk'.
+        method : str, optional
+            Semi-empirical method to use: 'parachor', 'wsd', or 'rk'. Default is 'parachor'.
+        recompute_parachor : bool, optional
+            If True (default), recompute parachor numbers at each temperature.
+        line : str, optional
+            Which saturation line(s) to compute: 'bubble', 'dew', or 'both'. Default is 'both'.
+        n_points : int or None, optional
+            Number of temperature grid points to use. If None (default), uses all provided
+            saturation points. Set to e.g. 50 for faster computation with interpolation.
+        P_offset_frac : float, optional
+            Fractional pressure offset to stay inside two-phase region. Default is 0.005
+            (0.5%). For bubble line uses P * (1 - offset), for dew line uses P * (1 + offset).
+
+        Returns
+        -------
+        dict
+            Dictionary with keys:
+            - 'bubble': dict with T, P, gamma, rho_l, rho_v, x, y, etc. for bubble line
+            - 'dew': dict with T, P, gamma, rho_l, rho_v, x, y, etc. for dew line
+            Empty dict for a line if line parameter excludes it.
+        """
+        method = method.lower().strip()
+        line = line.lower().strip()
+
+        if method not in ("parachor", "wsd", "rk"):
+            raise ValueError(f"method must be 'parachor', 'wsd', or 'rk'; got '{method}'.")
+
+        if line not in ("bubble", "dew", "both"):
+            raise ValueError(f"line must be 'bubble', 'dew', or 'both'; got '{line}'.")
+
+        if method == "parachor" and parachor_numbers is None and not recompute_parachor:
+            raise ValueError("parachor_numbers must be provided when method='parachor' and recompute_parachor=False.")
+
+        if method == "rk" and rk_coeffs is None:
+            raise ValueError("rk_coeffs must be provided when method='rk'.")
+
+        feed_z = np.asarray(feed_z, dtype=float)
+        feed_si = feed_z * si.MOL
+
+        def _empty_data() -> dict:
+            return {
+                k: []
+                for k in (
+                    "T", "P", "gamma", "rho_l", "rho_v", "x", "y",
+                    "gamma0", "rhoL0", "rhoV0", "Psat0", "Tc", "Pc", "parachor",
+                )
+            }
+
+        def _compute_line(T_arr: list[float], P_arr: list[float], is_bubble: bool) -> dict:
+            """Compute IFT along a single saturation line."""
+            data = _empty_data()
+            _cached_T = None
+            _current_parachor = parachor_numbers
+            _pure_cache_ok = False  # Track if pure component cache is valid
+
+            # Sort by temperature and create interpolation arrays
+            sorted_pairs = sorted(zip(T_arr, P_arr))
+            T_sorted = np.array([p[0] for p in sorted_pairs])
+            P_sorted = np.array([p[1] for p in sorted_pairs])
+
+            # Use coarser grid if n_points specified (for speed)
+            if n_points is not None and len(T_sorted) > n_points:
+                T_grid = np.linspace(T_sorted.min(), T_sorted.max() * 0.999, n_points)
+                P_grid = np.interp(T_grid, T_sorted, P_sorted)
+            else:
+                T_grid = T_sorted
+                P_grid = P_sorted
+
+            for T_K, P_bar in zip(T_grid, P_grid):
+                # Apply pressure offset to stay inside two-phase region
+                # Bubble: P slightly lower, Dew: P slightly higher
+                if is_bubble:
+                    P_bar_flash = P_bar * (1.0 - P_offset_frac)
+                else:
+                    P_bar_flash = P_bar * (1.0 + P_offset_frac)
+
+                T_si = T_K * si.KELVIN
+                P_si = P_bar_flash * si.BAR
+
+                # Update pure component cache and parachor if temperature changed
+                if T_K != _cached_T:
+                    _pure_cache_ok = False
+                    try:
+                        self.batch_pure_component_cDFT(component_names, T_K)
+                        _pure_cache_ok = True
+                    except Exception as exc:
+                        warnings.warn(
+                            f"[compute_saturation_line_IFT] pure cache failed at T={T_K:.1f} K: {exc}"
+                        )
+                        # For parachor method, pure component data is required
+                        if method == "parachor":
+                            continue
+
+                    if _pure_cache_ok and method == "parachor" and recompute_parachor:
+                        try:
+                            _current_parachor = self.batch_parachor_numbers(
+                                component_names, T_K, n_exp=n_exp, verbose=False
+                            )
+                        except Exception as exc:
+                            warnings.warn(
+                                f"[compute_saturation_line_IFT] parachor computation failed at T={T_K:.1f} K: {exc}"
+                            )
+                            continue
+
+                    _cached_T = T_K
+
+                # TP flash at saturation point
+                try:
+                    eq = feos.PhaseEquilibrium.tp_flash(eos, T_si, P_si, feed_si)
+                except Exception:
+                    continue
+
+                liq = eq.liquid
+                vap = eq.vapor
+                x = np.array(liq.molefracs, dtype=float)
+                y = np.array(vap.molefracs, dtype=float)
+
+                rho_l = self._density_fn(liq.density) * 1e-6
+                rho_v = self._density_fn(vap.density) * 1e-6
+
+                # Compute IFT using selected method
+                try:
+                    if method == "parachor":
+                        gamma = self.parachor_mixture_IFT(
+                            x, y, rho_l, rho_v,
+                            parachor_numbers=_current_parachor,
+                            kij=kij_parachor,
+                            n_exp=n_exp,
+                        )
+                    elif method == "wsd":
+                        gamma, _ = self.wsd_mixture_IFT(
+                            T_K, x, y, rho_l, rho_v,
+                            phi=phi_wsd,
+                            correction=wsd_correction,
+                        )
+                    elif method == "rk":
+                        gamma = self.RK_mixture_IFT(T_K, x, rk_coeffs)
+                    else:
+                        raise ValueError(f"Unknown method '{method}'.")
+
+                except Exception as exc:
+                    warnings.warn(
+                        f"[compute_saturation_line_IFT] IFT failed at "
+                        f"T={T_K:.1f} K, P={P_bar:.1f} bar: {exc}"
+                    )
+                    continue
+
+                if np.isnan(gamma) or gamma <= 0.0:
+                    continue
+
+                data["T"].append(T_K)
+                data["P"].append(P_bar)
+                data["gamma"].append(gamma)
+                data["rho_l"].append(rho_l)
+                data["rho_v"].append(rho_v)
+                data["x"].append(x.copy())
+                data["y"].append(y.copy())
+                # Pure component data (may be NaN if cDFT failed for non-parachor methods)
+                if _pure_cache_ok:
+                    data["gamma0"].append(self.gamma0.copy())
+                    data["rhoL0"].append(self.rhoL0.copy())
+                    data["rhoV0"].append(self.rhoV0.copy())
+                    data["Psat0"].append(self.Psat.copy())
+                    data["Tc"].append(self.Tc.copy())
+                    data["Pc"].append(self.Pc.copy())
+                else:
+                    n_comps = len(component_names)
+                    data["gamma0"].append(np.full(n_comps, np.nan))
+                    data["rhoL0"].append(np.full(n_comps, np.nan))
+                    data["rhoV0"].append(np.full(n_comps, np.nan))
+                    data["Psat0"].append(np.full(n_comps, np.nan))
+                    data["Tc"].append(np.full(n_comps, np.nan))
+                    data["Pc"].append(np.full(n_comps, np.nan))
+                data["parachor"].append(_current_parachor.copy() if _current_parachor is not None else None)
+
+            return data
+
+        result = {"bubble": {}, "dew": {}}
+
+        if line in ("bubble", "both"):
+            result["bubble"] = _compute_line(T_bub, P_bub, is_bubble=True)
+
+        if line in ("dew", "both"):
+            result["dew"] = _compute_line(T_dew, P_dew, is_bubble=False)
+
+        return result
+
+    @staticmethod
+    def saturation_line_to_dataframe(
+        data: dict,
+        component_names: list[str],
+        line: str = "both",
+    ) -> pd.DataFrame:
+        """
+        Convert saturation line data to a pandas DataFrame.
+
+        Parameters
+        ----------
+        data : dict
+            Output from compute_saturation_line_IFT.
+        component_names : list[str]
+            Names of the components.
+        line : str, optional
+            Which line to convert: 'bubble', 'dew', or 'both'. Default is 'both'.
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with saturation line IFT data. If 'both', includes a 'line' column.
+        """
+        line = line.lower().strip()
+
+        def _to_rows(line_data: dict, line_name: str) -> dict:
+            if not line_data or not line_data.get("T"):
+                return {}
+
+            rows = {
+                "T": line_data["T"],
+                "P": line_data["P"],
+                "gamma_mix": line_data["gamma"],
+                "rho_l": line_data["rho_l"],
+                "rho_v": line_data["rho_v"],
+                "line": [line_name] * len(line_data["T"]),
+            }
+
+            for i, name in enumerate(component_names):
+                rows[f"x_{name}"] = [v[i] for v in line_data["x"]]
+                rows[f"y_{name}"] = [v[i] for v in line_data["y"]]
+                rows[f"gamma0_{name}"] = [v[i] for v in line_data["gamma0"]]
+                rows[f"rhoL0_{name}"] = [v[i] for v in line_data["rhoL0"]]
+                rows[f"rhoV0_{name}"] = [v[i] for v in line_data["rhoV0"]]
+                rows[f"Psat0_{name}"] = [v[i] for v in line_data["Psat0"]]
+                rows[f"Tc_{name}"] = [v[i] for v in line_data["Tc"]]
+                rows[f"Pc_{name}"] = [v[i] for v in line_data["Pc"]]
+                rows[f"parachor_{name}"] = [v[i] if v is not None else None for v in line_data["parachor"]]
+
+            return rows
+
+        if line == "bubble":
+            rows = _to_rows(data.get("bubble", {}), "bubble")
+            if not rows:
+                return pd.DataFrame()
+            del rows["line"]
+            return pd.DataFrame(rows)
+
+        elif line == "dew":
+            rows = _to_rows(data.get("dew", {}), "dew")
+            if not rows:
+                return pd.DataFrame()
+            del rows["line"]
+            return pd.DataFrame(rows)
+
+        else:  # both
+            bub_rows = _to_rows(data.get("bubble", {}), "bubble")
+            dew_rows = _to_rows(data.get("dew", {}), "dew")
+
+            if not bub_rows and not dew_rows:
+                return pd.DataFrame()
+
+            df_bub = pd.DataFrame(bub_rows) if bub_rows else pd.DataFrame()
+            df_dew = pd.DataFrame(dew_rows) if dew_rows else pd.DataFrame()
+
+            return pd.concat([df_bub, df_dew], ignore_index=True)
 
     @staticmethod
     def data_to_dataframe(data: dict, component_names: list[str]) -> pd.DataFrame:
