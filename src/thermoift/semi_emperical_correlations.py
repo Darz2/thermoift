@@ -8,22 +8,32 @@
 # UPDATE: 2025-03-23 by Darshan (Add the PT colormap plotting and compute the with semi-emperical correlations).
 # UPDATE: 2026-03-24 by Darshan (Added compute_saturation_line_IFT for IFT along bubble/dew curves only)
 # UPDATE: 2026-03-25 by Darshan (Added the functionality of compute_saturation_line_IFT in the FEOS Plugin to compare (added but not as a function but as a useage code))
-# TODO: 2026-03-25 Add the KIJ functionality mostly in the useage code 
-# TODO (LATER): Add the IFT from the Pxy diagram for the binary mixtures (Validation)
-# TODO (LATER): Add the metastable limits from the CNT from the old parachorpy package
+# UPDATE: 2026-03-25 by Darshan Saved the computed IFT as Dataframes seperate function specific to ML was added
+# UPDATE: 2026-03-25 by claude  Added T-dependent kij_builder/model_map support to compute_PT_colormap_data and compute_saturation_line_IFT
+# TODO (LATER): Add the IFT from the Pxy diagram for the binary mixtures - similar to old paper/package
+# TODO (LATER): Add the metastable limits from the CNT similar to the old paper/parachorpy package
 
 """
-semi-emperical_correlations.py
-=====================
-Mixture interfacial tension via the Parachor and Winterfeld-Scriven-Davis (WSD)
-methods, fully consistent with the feos/PC-SAFT framework.
+semi_emperical_correlations.py
+==============================
+Mixture interfacial tension via semi-empirical methods, fully consistent
+with the feos/PC-SAFT framework.
 
-Pure-component Interfacial tension and saturation densities are
-obtained from PC-SAFT EoS + cDFT (planar interface).
+Pure-component interfacial tension and saturation densities are obtained
+from PC-SAFT EoS + cDFT (planar interface).
 
-Modules
------
-- PURE_COMPONENTS: Interfacial tension and saturation densities for pure components.
+Classes
+-------
+semi_emperical_correlations
+    Provides three semi-empirical methods for computing mixture IFT:
+
+    - **Parachor** : uses parachor numbers and phase densities.
+    - **WSD** : Winterfeld-Scriven-Davis method using pure-component IFTs.
+    - **RK** : Redlich-Kister polynomial expansion.
+
+    Additional functionality includes PT-colormap sweeps over the two-phase
+    region, saturation-line IFT calculations, and DataFrame/CSV export
+    utilities for ML training pipelines.
 """
 
 import os
@@ -43,16 +53,33 @@ from . import PLOT_SETTINGS as ps
 
 class semi_emperical_correlations:
     """
-    Mixture interfacial tension via the Parachor and Winterfeld-Scriven-Davis (WSD)
-    methods, fully consistent with the feos/PC-SAFT framework.
+    Mixture interfacial tension via semi-empirical correlations, fully consistent
+    with the feos/PC-SAFT framework.
 
-    Pure-component Interfacial tension and saturation densities are computed from the
-    PC-SAFT EoS + cDFT (planar interface).
+    Pure-component interfacial tensions and saturation densities are computed
+    from PC-SAFT EoS + cDFT (planar interface) and cached internally so that
+    expensive DFT solves are not repeated unnecessarily.
 
-    This class provides three semi-empirical methods for computing mixture IFT:
-    - **Parachor**: Uses parachor numbers and phase densities
-    - **WSD**: Winterfeld-Scriven-Davis method using pure-component IFTs
-    - **RK**: Redlich-Kister polynomial expansion
+    Three semi-empirical methods are available for computing mixture IFT:
+
+    - **Parachor** : uses parachor numbers and mixture phase densities.
+    - **WSD** : Winterfeld-Scriven-Davis method using pure-component IFTs
+      (DOI:10.1002/aic.690240610).
+    - **RK** : Redlich-Kister polynomial expansion for the excess IFT.
+
+    Typical workflow
+    ----------------
+    1. Instantiate the class (configure cDFT grid).
+    2. Populate the pure-component cache with ``batch_pure_component_cDFT``
+       (full cDFT) or ``batch_pure_component_VLE`` (fast VLE + scaling).
+    3. Compute mixture IFT at a single state point via ``parachor_mixture_IFT``,
+       ``wsd_mixture_IFT``, or ``RK_mixture_IFT``.
+    4. For multi-point sweeps use ``compute_PT_colormap_data`` (full T-P grid)
+       or ``compute_saturation_line_IFT`` (bubble/dew curves only).
+    5. Export results to pandas DataFrames / CSV with ``data_to_dataframe``,
+       ``saturation_line_to_dataframe``, ``save_saturation_dataframes``, or
+       ``save_PT_colormap_dataframes``.
+    6. Visualise with ``plot_PT_colormap``.
 
     Parameters
     ----------
@@ -64,7 +91,8 @@ class semi_emperical_correlations:
     Attributes
     ----------
     component_names : list[str] or None
-        Component names set by the last call to batch_pure_component_cDFT().
+        Component names set by the last call to ``batch_pure_component_cDFT``
+        or ``batch_pure_component_VLE``.
     T_K_cached : float or None
         Temperature [K] for which pure-component data are currently cached.
     gamma0 : np.ndarray or None
@@ -79,6 +107,37 @@ class semi_emperical_correlations:
         Cached PC-SAFT critical temperatures [K], shape (N,).
     Pc : np.ndarray or None
         Cached PC-SAFT critical pressures [bar], shape (N,).
+
+    Methods
+    -------
+    batch_pure_component_cDFT(component_names, T_K)
+        Full cDFT solve for every pure component; populates the cache.
+    batch_pure_component_VLE(component_names, T_K, ...)
+        Fast VLE-only alternative (~100x faster, uses scaling for gamma0).
+    batch_parachor_numbers(component_names, T_K, ...)
+        Parachor numbers from cached (or freshly computed) pure data.
+    parachor_mixture_IFT(x, y, rho_l, rho_v, parachor_numbers, ...)
+        Single-point mixture IFT via the Parachor method.
+    wsd_mixture_IFT(T_K, x, y, rho_l, rho_v, ...)
+        Single-point mixture IFT via the WSD method.
+    RK_mixture_IFT(T_K, x, rk_coeffs)
+        Single-point mixture IFT via the Redlich-Kister method.
+    compute_PT_colormap_data(...)
+        Sweep a (T, P) grid inside the two-phase envelope.
+    compute_saturation_line_IFT(...)
+        IFT along the bubble and/or dew curves only.
+    data_to_dataframe(data, component_names)
+        Convert PT-colormap dict to a flat DataFrame.
+    saturation_line_to_dataframe(data, component_names, ...)
+        Convert saturation-line dict to a DataFrame.
+    prepare_method_df(df, line_name, method_suffix)
+        Filter and suffix-rename a saturation DataFrame for merging.
+    save_saturation_dataframes(...)
+        Export saturation-line results to CSV (ML-ready or minimal).
+    save_PT_colormap_dataframes(...)
+        Export PT-colormap results to CSV (ML-ready or minimal).
+    plot_PT_colormap(...)
+        Filled-contour visualisation of IFT over the two-phase region.
 
     Examples
     --------
@@ -709,6 +768,8 @@ class semi_emperical_correlations:
         n_T: int = 30,
         n_P: int = 30,
         recompute_parachor: bool = True,
+        kij_builder=None,
+        model_map: dict | None = None,
     ) -> dict:
         """
         Sweep a (T, P) grid inside the two-phase envelope, run a TP flash at
@@ -758,6 +819,13 @@ class semi_emperical_correlations:
             If True (default), recompute parachor numbers at each temperature
             using batch_parachor_numbers. If False, use the fixed parachor_numbers
             array for all temperatures.
+        kij_builder : KIJMatrixBuilder or None, optional
+            If provided, rebuilds the PC-SAFT eos with T-dependent kij at each
+            temperature in the sweep. Requires model_map. Default is None (use
+            the single eos for all temperatures).
+        model_map : dict or None, optional
+            Maps component pairs to kij model type (e.g., {("CO2","Ar"): "constant"}).
+            Only used when kij_builder is not None.
 
         Returns
         -------
@@ -830,6 +898,7 @@ class semi_emperical_correlations:
         T_range = np.linspace(min(T_bub), max(T_bub) * 0.999, n_T)
         _cached_T = None
         _current_parachor = parachor_numbers  # start with user-supplied or None
+        _current_eos = eos  # may be rebuilt per T when kij_builder is provided
 
         for T_K in T_range:
 
@@ -849,6 +918,13 @@ class semi_emperical_correlations:
                         _current_parachor = self.batch_parachor_numbers(
                             component_names, T_K, n_exp=n_exp, verbose=False
                         )
+                    # Rebuild eos with T-dependent kij if builder provided
+                    if kij_builder is not None:
+                        params_T = PARAMETERS(
+                            component_names, T_K=float(T_K),
+                            kij_builder=kij_builder, model_map=model_map,
+                        )
+                        _current_eos = feos.HelmholtzEnergyFunctional.pcsaft(params_T)
                     _cached_T = T_K
                 except Exception as exc:
                     warnings.warn(
@@ -862,7 +938,7 @@ class semi_emperical_correlations:
                 P_si = P_bar * si.BAR
 
                 try:
-                    eq = feos.PhaseEquilibrium.tp_flash(eos, T_si, P_si, feed_si)
+                    eq = feos.PhaseEquilibrium.tp_flash(_current_eos, T_si, P_si, feed_si)
                 except Exception:
                     continue
 
@@ -953,6 +1029,8 @@ class semi_emperical_correlations:
         line: str = "both",
         n_points: int | None = None,
         P_offset_frac: float = 0.005,
+        kij_builder=None,
+        model_map: dict | None = None,
     ) -> dict:
         """
         Compute mixture IFT only along the saturation lines (bubble and/or dew curves).
@@ -999,6 +1077,11 @@ class semi_emperical_correlations:
         P_offset_frac : float, optional
             Fractional pressure offset to stay inside two-phase region. Default is 0.005
             (0.5%). For bubble line uses P * (1 - offset), for dew line uses P * (1 + offset).
+        kij_builder : KIJMatrixBuilder or None, optional
+            If provided, rebuilds the PC-SAFT eos with T-dependent kij at each
+            temperature. Requires model_map. Default is None.
+        model_map : dict or None, optional
+            Maps component pairs to kij model type. Only used when kij_builder is not None.
 
         Returns
         -------
@@ -1041,6 +1124,7 @@ class semi_emperical_correlations:
             data = _empty_data()
             _cached_T = None
             _current_parachor = parachor_numbers
+            _current_eos = eos  # may be rebuilt per T when kij_builder is provided
             _pure_cache_ok = False  # Track if pure component cache is valid
 
             # Sort by temperature and create interpolation arrays
@@ -1092,11 +1176,19 @@ class semi_emperical_correlations:
                             )
                             continue
 
+                    # Rebuild eos with T-dependent kij if builder provided
+                    if kij_builder is not None:
+                        params_T = PARAMETERS(
+                            component_names, T_K=float(T_K),
+                            kij_builder=kij_builder, model_map=model_map,
+                        )
+                        _current_eos = feos.HelmholtzEnergyFunctional.pcsaft(params_T)
+
                     _cached_T = T_K
 
                 # TP flash at saturation point
                 try:
-                    eq = feos.PhaseEquilibrium.tp_flash(eos, T_si, P_si, feed_si)
+                    eq = feos.PhaseEquilibrium.tp_flash(_current_eos, T_si, P_si, feed_si)
                 except Exception:
                     continue
 
@@ -1269,8 +1361,26 @@ class semi_emperical_correlations:
     @staticmethod
     def data_to_dataframe(data: dict, component_names: list[str]) -> pd.DataFrame:
         """
-        Convert the dict returned by compute_PT_colormap_data into a flat
+        Convert the dict returned by ``compute_PT_colormap_data`` into a flat
         pandas DataFrame.
+
+        Parameters
+        ----------
+        data : dict
+            Output dictionary from ``compute_PT_colormap_data`` containing lists
+            keyed by 'T', 'P', 'gamma', 'rho_l', 'rho_v', 'x', 'y', 'gamma0',
+            'rhoL0', 'rhoV0', 'Psat0', 'Tc', 'Pc', and 'parachor'.
+        component_names : list[str]
+            Names of the components, used to expand per-component array entries
+            into individual columns (e.g. ``x_methane``, ``gamma0_ethane``).
+
+        Returns
+        -------
+        pd.DataFrame
+            Flat DataFrame with scalar columns for T, P, gamma_mix, rho_l, rho_v
+            and per-component columns for mole fractions, pure-component IFTs,
+            densities, saturation pressures, critical properties, and parachor
+            numbers.
         """
         rows: dict[str, list] = {
             "T": data["T"],
@@ -1295,6 +1405,29 @@ class semi_emperical_correlations:
     
     @staticmethod
     def prepare_method_df(df: pd.DataFrame, line_name: str, method_suffix: str) -> pd.DataFrame:
+        """
+        Filter a saturation-line DataFrame by line type and suffix-rename columns.
+
+        Selects rows where ``df["line"] == line_name`` and appends
+        ``_<method_suffix>`` to every column except 'T' and 'line', so that
+        DataFrames from different methods can be merged on 'T' without
+        column-name collisions.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Combined saturation-line DataFrame (must contain a 'line' column),
+            typically from ``saturation_line_to_dataframe(..., line='both')``.
+        line_name : str
+            Saturation line to keep: ``'bubble'`` or ``'dew'``.
+        method_suffix : str
+            Suffix appended to renamed columns (e.g. ``'parachor'``, ``'wsd'``).
+
+        Returns
+        -------
+        pd.DataFrame
+            Filtered and renamed copy of the input DataFrame.
+        """
         out = df[df["line"] == line_name].copy()
 
         rename_map = {
@@ -1817,7 +1950,46 @@ class semi_emperical_correlations:
         isoline_step: int = 2,
     ) -> tuple[plt.Figure, plt.Axes]:
         """
-        Plot the PT colormap of mixture IFT.
+        Plot a filled-contour PT colormap of mixture IFT inside the two-phase
+        envelope, with iso-IFT lines, bubble/dew curves, and the critical point.
+
+        The scattered (T, P, gamma) data are interpolated onto a regular grid
+        using cubic ``griddata``, masked outside the phase envelope, and rendered
+        with ``contourf`` (colour fill) and ``contour`` (labelled iso-lines).
+
+        Parameters
+        ----------
+        data : dict
+            Output from ``compute_PT_colormap_data`` containing at least
+            'T', 'P', and 'gamma' lists.
+        T_bub, P_bub : list[float]
+            Bubble-point temperatures [K] and pressures [bar].
+        T_dew, P_dew : list[float]
+            Dew-point temperatures [K] and pressures [bar].
+        Tc_K : float
+            Mixture critical temperature [K], plotted as a marker.
+        Pc_bar : float
+            Mixture critical pressure [bar], plotted as a marker.
+        params : feos.PcSaftParameters
+            PC-SAFT parameter record, used to extract component names and
+            LaTeX formulae for the title.
+        feed_z : np.ndarray
+            Feed mole fractions, shape (N,), shown in the title.
+        title_suffix : str, optional
+            Extra text appended to the auto-generated title. Default is ``""``.
+        grid_size : int, optional
+            Number of points along each axis of the interpolation grid.
+            Default is 200.
+        isoline_step : int, optional
+            Spacing (in mN/m) between labelled iso-IFT contour lines.
+            Default is 2.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure or None
+            The figure object. ``None`` if fewer than 4 valid data points.
+        ax : matplotlib.axes.Axes or None
+            The axes object. ``None`` if fewer than 4 valid data points.
         """
 
         T_pts = data["T"]
