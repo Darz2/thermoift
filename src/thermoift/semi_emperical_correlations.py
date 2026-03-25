@@ -7,9 +7,10 @@
 # UPDATE: 2025-03-23 by Darshan (Test and made the examples to compute the interfacial tension of the semi emperical models)
 # UPDATE: 2025-03-23 by Darshan (Add the PT colormap plotting and compute the with semi-emperical correlations).
 # UPDATE: 2026-03-24 by Darshan (Added compute_saturation_line_IFT for IFT along bubble/dew curves only)
-# TODO: Add the functinality of compute_saturation_line_IFT in the FEOS Plugin to compare
-# TODO: Add the IFT from the Pxy diagram for the binary mixtures (Validation)
-# TODO: Add the metastable limits from the CNT from the old parachorpy package
+# UPDATE: 2026-03-25 by Darshan (Added the functionality of compute_saturation_line_IFT in the FEOS Plugin to compare (added but not as a function but as a useage code))
+# TODO: 2026-03-25 Add the KIJ functionality mostly in the useage code 
+# TODO (LATER): Add the IFT from the Pxy diagram for the binary mixtures (Validation)
+# TODO (LATER): Add the metastable limits from the CNT from the old parachorpy package
 
 """
 semi-emperical_correlations.py
@@ -25,6 +26,7 @@ Modules
 - PURE_COMPONENTS: Interfacial tension and saturation densities for pure components.
 """
 
+import os
 import feos
 import numpy as np
 import pandas as pd
@@ -408,7 +410,7 @@ class semi_emperical_correlations:
             Array of parachor numbers, shape (N,).
         """
         # Get pure-component data at T_K
-        gamma0, rhoL0, rhoV0, Tc0, Pc0, Psat0 = self.batch_pure_component_cDFT(
+        gamma0, rhoL0, rhoV0, Tc0, _, _ = self.batch_pure_component_cDFT(
             component_names, T_K
         )
 
@@ -945,7 +947,6 @@ class semi_emperical_correlations:
         kij_parachor: float = 0.0,
         n_exp: float = 3.87,
         phi_wsd: float = 1.0,
-        wsd_correction: bool = True,
         rk_coeffs: np.ndarray | None = None,
         method: str = "parachor",
         recompute_parachor: bool = True,
@@ -984,8 +985,6 @@ class semi_emperical_correlations:
             Exponent in the parachor IFT equation. Default is 3.87.
         phi_wsd : float, optional
             Correction factor (phi) for the WSD method. Default is 1.0.
-        wsd_correction : bool, optional
-            Whether to apply correction in the WSD method. Default is True.
         rk_coeffs : np.ndarray or None, optional
             Redlich-Kister coefficients for the RK method. Required when method='rk'.
         method : str, optional
@@ -1005,9 +1004,10 @@ class semi_emperical_correlations:
         -------
         dict
             Dictionary with keys:
-            - 'bubble': dict with T, P, gamma, rho_l, rho_v, x, y, etc. for bubble line
-            - 'dew': dict with T, P, gamma, rho_l, rho_v, x, y, etc. for dew line
-            Empty dict for a line if line parameter excludes it.
+            - 'bubble': dict with T, P, gamma, gamma_wsd_corrected, rho_l, rho_v, x, y, etc.
+            - 'dew': dict with T, P, gamma, gamma_wsd_corrected, rho_l, rho_v, x, y, etc.
+            For WSD method, both 'gamma' (uncorrected) and 'gamma_wsd_corrected' are computed
+            in a single pass to save computation. Empty dict for a line if line parameter excludes it.
         """
         method = method.lower().strip()
         line = line.lower().strip()
@@ -1031,7 +1031,7 @@ class semi_emperical_correlations:
             return {
                 k: []
                 for k in (
-                    "T", "P", "gamma", "rho_l", "rho_v", "x", "y",
+                    "T", "P", "gamma", "gamma_wsd_corrected", "rho_l", "rho_v", "x", "y",
                     "gamma0", "rhoL0", "rhoV0", "Psat0", "Tc", "Pc", "parachor",
                 )
             }
@@ -1109,6 +1109,7 @@ class semi_emperical_correlations:
                 rho_v = self._density_fn(vap.density) * 1e-6
 
                 # Compute IFT using selected method
+                gamma_wsd_corrected = np.nan  # Only used for WSD method
                 try:
                     if method == "parachor":
                         gamma = self.parachor_mixture_IFT(
@@ -1118,10 +1119,17 @@ class semi_emperical_correlations:
                             n_exp=n_exp,
                         )
                     elif method == "wsd":
+                        # Compute both uncorrected and corrected WSD in one pass
+                        # (saves the expensive TP flash and cDFT, only wsd_mixture_IFT is called twice)
                         gamma, _ = self.wsd_mixture_IFT(
                             T_K, x, y, rho_l, rho_v,
                             phi=phi_wsd,
-                            correction=wsd_correction,
+                            correction=False,
+                        )
+                        gamma_wsd_corrected, _ = self.wsd_mixture_IFT(
+                            T_K, x, y, rho_l, rho_v,
+                            phi=phi_wsd,
+                            correction=True,
                         )
                     elif method == "rk":
                         gamma = self.RK_mixture_IFT(T_K, x, rk_coeffs)
@@ -1141,6 +1149,7 @@ class semi_emperical_correlations:
                 data["T"].append(T_K)
                 data["P"].append(P_bar)
                 data["gamma"].append(gamma)
+                data["gamma_wsd_corrected"].append(gamma_wsd_corrected)
                 data["rho_l"].append(rho_l)
                 data["rho_v"].append(rho_v)
                 data["x"].append(x.copy())
@@ -1208,6 +1217,7 @@ class semi_emperical_correlations:
                 "T": line_data["T"],
                 "P": line_data["P"],
                 "gamma_mix": line_data["gamma"],
+                "gamma_wsd_corrected": line_data.get("gamma_wsd_corrected", [np.nan] * len(line_data["T"])),
                 "rho_l": line_data["rho_l"],
                 "rho_v": line_data["rho_v"],
                 "line": [line_name] * len(line_data["T"]),
@@ -1216,6 +1226,10 @@ class semi_emperical_correlations:
             for i, name in enumerate(component_names):
                 rows[f"x_{name}"] = [v[i] for v in line_data["x"]]
                 rows[f"y_{name}"] = [v[i] for v in line_data["y"]]
+                # Add partial densities for all components: rhoLi = x[i] * rho_l, rhoVi = y[i] * rho_v
+                # Use i+1 for indexing since 0 is reserved for pure properties (rhoL0, rhoV0)
+                rows[f"rhoL{i+1}_{name}"] = [v[i] * rho for v, rho in zip(line_data["x"], line_data["rho_l"])]
+                rows[f"rhoV{i+1}_{name}"] = [v[i] * rho for v, rho in zip(line_data["y"], line_data["rho_v"])]
                 rows[f"gamma0_{name}"] = [v[i] for v in line_data["gamma0"]]
                 rows[f"rhoL0_{name}"] = [v[i] for v in line_data["rhoL0"]]
                 rows[f"rhoV0_{name}"] = [v[i] for v in line_data["rhoV0"]]
@@ -1278,6 +1292,514 @@ class semi_emperical_correlations:
             rows[f"parachor_{name}"] = [v[i] if v is not None else None for v in data["parachor"]]
 
         return pd.DataFrame(rows)
+    
+    @staticmethod
+    def prepare_method_df(df: pd.DataFrame, line_name: str, method_suffix: str) -> pd.DataFrame:
+        out = df[df["line"] == line_name].copy()
+
+        rename_map = {
+            col: f"{col}_{method_suffix}"
+            for col in out.columns
+            if col not in ["T", "line"]
+        }
+
+        return out.rename(columns=rename_map)
+
+    @staticmethod
+    def save_saturation_dataframes(
+        df_sat_parachor: pd.DataFrame,
+        df_sat_wsd: pd.DataFrame,
+        output_dir: str,
+        component_names: list[str],
+        feed_z: np.ndarray,
+        n_exp: float = 3.87,
+        kij_parachor: float = 0.0,
+        ML_mode: bool = True,
+        main_component_index: int = 0,
+        all_components: list[str] | None = None,
+    ) -> dict[str, pd.DataFrame]:
+        """
+        Save saturation IFT DataFrames to separate CSV files by method and line.
+ 
+        Since parachor and WSD methods may have different row counts, this saves
+        them as separate files rather than merging.
+ 
+        Parameters
+        ----------
+        df_sat_parachor : pd.DataFrame
+            DataFrame from parachor method (from saturation_line_to_dataframe).
+        df_sat_wsd : pd.DataFrame
+            DataFrame from WSD method (contains gamma_mix and gamma_wsd_corrected).
+        output_dir : str
+            Directory to save CSV files. Creates if doesn't exist.
+        component_names : list[str]
+            Names of the active components in this mixture.
+        feed_z : np.ndarray
+            Overall feed composition as mole fractions, shape (N,). Must sum to 1.0.
+        n_exp : float, optional
+            Parachor exponent (default 3.87). Added as a column in parachor CSV.
+        ML_mode : bool, optional
+            If True (default), includes all columns needed for ML training:
+            - T, P, rho_l, rho_v (mixture properties)
+            - z_{comp}, x_{comp}, y_{comp} (compositions for all_components, zeros for inactive)
+            - Pure properties only for main component (others are often supercritical)
+            - parachor_{comp}, n_exp (for parachor method)
+            If False, includes only T, P, and gamma columns.
+        main_component_index : int, optional
+            Index of the main component (default 0, typically CO2) for which
+            pure properties (gamma0, rhoL0, rhoV0, Tc, Pc, Psat0) are included.
+            Impurities are often supercritical and would have NaN values.
+        all_components : list[str], optional
+            Full list of all possible components for ML training. If provided,
+            pads z, x, y, parachor columns with zeros for inactive components.
+            This ensures consistent column structure across different mixtures.
+            If None, only active component_names are included.
+ 
+        Returns
+        -------
+        dict[str, pd.DataFrame]
+            Dictionary with keys: 'bubble_parachor', 'bubble_wsd',
+            'dew_parachor', 'dew_wsd'.
+        """
+        os.makedirs(output_dir, exist_ok=True)
+        result = {}
+        feed_z = np.asarray(feed_z, dtype=float)
+ 
+        # Use all_components if provided, otherwise just active components
+        output_components = all_components if all_components is not None else component_names
+ 
+        # Main component for pure properties (impurities often supercritical)
+        main_comp = component_names[main_component_index]
+ 
+        # Build dictionaries for active components
+        z_dict = {c: float(feed_z[i]) for i, c in enumerate(component_names)}
+ 
+        # Define column groups for ML mode
+        base_cols = ["T", "P", "rho_l", "rho_v"]
+        # Only include pure properties for the main component
+        pure_prop_cols = [
+            f"gamma0_{main_comp}", f"rhoL0_{main_comp}", f"rhoV0_{main_comp}",
+            f"Tc_{main_comp}", f"Pc_{main_comp}", f"Psat0_{main_comp}"
+        ]
+ 
+        def _add_padded_compositions(df: pd.DataFrame, include_parachor: bool) -> pd.DataFrame:
+            """Add z, x, y (and optionally parachor) columns, padded with zeros for inactive components."""
+            n_rows = len(df)
+ 
+            # Feed composition (z) - constant for all rows
+            for c in output_components:
+                df[f"z_{c}"] = z_dict.get(c, 0.0)
+ 
+            # Liquid mole fractions (x) - from DataFrame or zero
+            for c in output_components:
+                src_col = f"x_{c}"
+                if src_col in df.columns:
+                    pass  # Already present
+                else:
+                    df[f"x_{c}"] = 0.0
+ 
+            # Vapor mole fractions (y) - from DataFrame or zero
+            for c in output_components:
+                src_col = f"y_{c}"
+                if src_col in df.columns:
+                    pass  # Already present
+                else:
+                    df[f"y_{c}"] = 0.0
+ 
+            # Parachor values (if applicable)
+            if include_parachor:
+                for c in output_components:
+                    src_col = f"parachor_{c}"
+                    if src_col in df.columns:
+                        pass  # Already present
+                    else:
+                        df[f"parachor_{c}"] = 0.0
+ 
+            return df
+ 
+        # Map each component name -> its source density column name (uses component_names index)
+        _comp_to_src_rhoL = {c: f"rhoL{i+1}_{c}" for i, c in enumerate(component_names)}
+        _comp_to_src_rhoV = {c: f"rhoV{i+1}_{c}" for i, c in enumerate(component_names)}
+ 
+        def _add_padded_densities(df: pd.DataFrame) -> pd.DataFrame:
+            """
+            Add rhoL{j+1}_{c} and rhoV{j+1}_{c} columns for every component in
+            output_components (indexed by position in output_components).
+            Active components copy from the existing source column; inactive ones are 0.
+            """
+            for j, c in enumerate(output_components):
+                dst_L = f"rhoL{j+1}_{c}"
+                dst_V = f"rhoV{j+1}_{c}"
+                src_L = _comp_to_src_rhoL.get(c)
+                src_V = _comp_to_src_rhoV.get(c)
+                # Liquid component density
+                if src_L and src_L in df.columns:
+                    df[dst_L] = df[src_L]
+                    if dst_L != src_L:          # rename completed; drop the old name
+                        df.drop(columns=[src_L], inplace=True)
+                elif dst_L not in df.columns:
+                    df[dst_L] = 0.0
+                # Vapour component density
+                if src_V and src_V in df.columns:
+                    df[dst_V] = df[src_V]
+                    if dst_V != src_V:
+                        df.drop(columns=[src_V], inplace=True)
+                elif dst_V not in df.columns:
+                    df[dst_V] = 0.0
+            return df
+ 
+        def _reorder_columns_parachor(df: pd.DataFrame) -> pd.DataFrame:
+            """Reorder columns for parachor method: T, P, z, rho_l, rho_v, x, y, rhoL_i, rhoV_i, pure_props, parachor, n_exp, gamma."""
+            ordered = ["T", "P"]
+            ordered += [f"z_{c}" for c in output_components]
+            ordered += ["rho_l", "rho_v"]
+            ordered += [f"x_{c}" for c in output_components]
+            ordered += [f"y_{c}" for c in output_components]
+            ordered += [c for c in pure_prop_cols if c in df.columns]
+            ordered += [f"parachor_{c}" for c in output_components]
+            ordered += ["n_exp", "gamma_parachor"]
+            # Only include columns that exist
+            ordered = [c for c in ordered if c in df.columns]
+            return df[ordered]
+ 
+        def _reorder_columns_wsd(df: pd.DataFrame) -> pd.DataFrame:
+            """Reorder columns for WSD method: T, P, z, rho_l, rho_v, x, y, rhoL_i, rhoV_i, pure_props, gamma."""
+            ordered = ["T", "P"]
+            ordered += [f"z_{c}" for c in output_components]
+            ordered += ["rho_l", "rho_v"]
+            ordered += [f"x_{c}" for c in output_components]
+            ordered += [f"y_{c}" for c in output_components]
+            ordered += [f"rhoL{j+1}_{c}" for j, c in enumerate(output_components)]
+            ordered += [f"rhoV{j+1}_{c}" for j, c in enumerate(output_components)]
+            ordered += [c for c in pure_prop_cols if c in df.columns]
+            # Add gamma columns at the end
+            gamma_cols = [c for c in df.columns if c.startswith("gamma") and c not in ordered]
+            ordered += gamma_cols
+            # Only include columns that exist
+            ordered = [c for c in ordered if c in df.columns]
+            return df[ordered]
+ 
+        for line in ["bubble", "dew"]:
+            # --- Parachor method ---
+            # Variables: T, P, rho_l, rho_v, x, y, pure_props, parachor, n_exp, gamma
+            df_para_full = df_sat_parachor[df_sat_parachor["line"] == line].copy()
+ 
+            if ML_mode:
+                # Select parachor-relevant columns including pure properties
+                active_mole_cols = [f"x_{c}" for c in component_names] + [f"y_{c}" for c in component_names]
+                active_parachor_cols = [f"parachor_{c}" for c in component_names]
+                active_comp_density_cols = (
+                    [f"rhoL{i+1}_{c}" for i, c in enumerate(component_names)] +
+                    [f"rhoV{i+1}_{c}" for i, c in enumerate(component_names)]
+                )
+                para_cols = ["T", "P", "rho_l", "rho_v"] + active_mole_cols + active_comp_density_cols + pure_prop_cols + active_parachor_cols + ["gamma_mix"]
+                para_cols = [c for c in para_cols if c in df_para_full.columns]
+                df_para = df_para_full[para_cols].copy()
+                # Pad z, x, y, rhoL_i, rhoV_i, parachor with zeros for inactive components
+                for c in output_components:
+                    df_para[f"z_{c}"] = z_dict.get(c, 0.0)
+                    if f"x_{c}" not in df_para.columns:
+                        df_para[f"x_{c}"] = 0.0
+                    if f"y_{c}" not in df_para.columns:
+                        df_para[f"y_{c}"] = 0.0
+                    if f"parachor_{c}" not in df_para.columns:
+                        df_para[f"parachor_{c}"] = 0.0
+                df_para = _add_padded_densities(df_para)
+                # Add parachor exponent
+                df_para["n_exp"] = n_exp
+                df_para = df_para.rename(columns={"gamma_mix": "gamma_parachor"})
+                df_para = _reorder_columns_parachor(df_para)
+            else:
+                df_para = df_para_full[["T", "P", "gamma_mix"]].copy()
+                df_para = df_para.rename(columns={"gamma_mix": "gamma_parachor"})
+ 
+            df_para = df_para.sort_values("T").reset_index(drop=True)
+ 
+            para_path = os.path.join(output_dir, f"{line}_parachor.csv")
+            df_para.to_csv(para_path, index=False)
+            result[f"{line}_parachor"] = df_para
+            print(f"Saved {para_path} ({len(df_para)} rows, {len(df_para.columns)} cols)")
+ 
+            # --- WSD method ---
+            df_wsd_full = df_sat_wsd[df_sat_wsd["line"] == line].copy()
+ 
+            if ML_mode:
+                # Select base columns and active component columns that exist (no parachor for WSD)
+                active_mole_cols = [f"x_{c}" for c in component_names] + [f"y_{c}" for c in component_names]
+                active_comp_density_cols = (
+                    [f"rhoL{i+1}_{c}" for i, c in enumerate(component_names)] +
+                    [f"rhoV{i+1}_{c}" for i, c in enumerate(component_names)]
+                )
+                wsd_cols = base_cols + active_mole_cols + active_comp_density_cols + pure_prop_cols + ["gamma_mix", "gamma_wsd_corrected"]
+                wsd_cols = [c for c in wsd_cols if c in df_wsd_full.columns]
+                df_wsd = df_wsd_full[wsd_cols].copy()
+                df_wsd = _add_padded_compositions(df_wsd, include_parachor=False)
+                df_wsd = _add_padded_densities(df_wsd)
+                df_wsd = df_wsd.rename(columns={"gamma_mix": "gamma_wsd"})
+                df_wsd = _reorder_columns_wsd(df_wsd)
+            else:
+                df_wsd = df_wsd_full[["T", "P", "gamma_mix", "gamma_wsd_corrected"]].copy()
+                df_wsd = df_wsd.rename(columns={"gamma_mix": "gamma_wsd"})
+ 
+            df_wsd = df_wsd.sort_values("T").reset_index(drop=True)
+ 
+            wsd_path = os.path.join(output_dir, f"{line}_wsd.csv")
+            df_wsd.to_csv(wsd_path, index=False)
+            result[f"{line}_wsd"] = df_wsd
+            print(f"Saved {wsd_path} ({len(df_wsd)} rows, {len(df_wsd.columns)} cols)")
+ 
+        return result
+
+    @staticmethod
+    def save_PT_colormap_dataframes(
+        data_parachor: dict,
+        data_wsd: dict,
+        output_dir: str,
+        component_names: list[str],
+        feed_z: np.ndarray,
+        n_exp: float = 3.87,
+        ML_mode: bool = True,
+        main_component_index: int = 0,
+        all_components: list[str] | None = None,
+        data_parachor_fixed: dict | None = None,
+        T_ref_fixed: float | None = None,
+    ) -> dict[str, pd.DataFrame]:
+        """
+        Save PT colormap IFT DataFrames to CSV files, one per method.
+
+        Mirrors save_saturation_dataframes but operates on the full two-phase
+        region data from compute_PT_colormap_data (no bubble/dew split).
+
+        Saved files
+        -----------
+        PT_parachor.csv          : T-dependent parachor
+        PT_parachor_fixed.csv    : Fixed-T parachor (only if data_parachor_fixed given)
+        PT_wsd.csv               : WSD method
+
+        Column layout (ML_mode=True)
+        ----------------------------
+        T, P, z_i, rho_l, rho_v, x_i, y_i, rhoL_i, rhoV_i,
+        pure_props (main comp only), [parachor_i, n_exp,] gamma
+
+        Parameters
+        ----------
+        data_parachor : dict
+            Output of compute_PT_colormap_data with method='parachor' and
+            recompute_parachor=True.
+        data_wsd : dict
+            Output of compute_PT_colormap_data with method='wsd'.
+        output_dir : str
+            Directory for CSV files (created if absent).
+        component_names : list[str]
+            Active components in this mixture.
+        feed_z : np.ndarray
+            Feed mole fractions, shape (N,).
+        n_exp : float, optional
+            Parachor exponent written as a column. Default 3.87.
+        ML_mode : bool, optional
+            If True (default), write all features needed for ML training.
+            If False, write only T, P, and gamma column(s).
+        main_component_index : int, optional
+            Index of the primary component (default 0) whose pure properties
+            (gamma0, rhoL0, rhoV0, Tc, Pc, Psat0) are included.
+            Impurity components are often supercritical and would be NaN.
+        all_components : list[str] or None, optional
+            Full component universe for consistent column layout across
+            different mixture CSVs.  Inactive components get zero-filled
+            z, x, y, rhoL, rhoV, and parachor columns.
+        data_parachor_fixed : dict or None, optional
+            Output of compute_PT_colormap_data with recompute_parachor=False
+            (fixed-T parachor numbers).  Saved as PT_parachor_fixed.csv.
+        T_ref_fixed : float or None, optional
+            Reference temperature used for fixed parachor numbers; appended
+            to the CSV filename suffix in the print statement only.
+
+        Returns
+        -------
+        dict[str, pd.DataFrame]
+            Keys: 'PT_parachor', 'PT_wsd', and optionally 'PT_parachor_fixed'.
+        """
+        os.makedirs(output_dir, exist_ok=True)
+        result: dict[str, pd.DataFrame] = {}
+        feed_z = np.asarray(feed_z, dtype=float)
+
+        output_components = all_components if all_components is not None else component_names
+        main_comp         = component_names[main_component_index]
+        z_dict            = {c: float(feed_z[i]) for i, c in enumerate(component_names)}
+
+        pure_prop_cols = [
+            f"gamma0_{main_comp}", f"rhoL0_{main_comp}", f"rhoV0_{main_comp}",
+            f"Tc_{main_comp}",     f"Pc_{main_comp}",    f"Psat0_{main_comp}",
+        ]
+
+        # ------------------------------------------------------------------
+        # Build a flat DataFrame from a raw compute_PT_colormap_data dict,
+        # including component-specific partial densities.
+        # ------------------------------------------------------------------
+        def _raw_to_df(data: dict, include_parachor: bool) -> pd.DataFrame:
+            """Expand the nested lists in *data* into a flat DataFrame."""
+            rows: dict[str, list] = {
+                "T":     data["T"],
+                "P":     data["P"],
+                "rho_l": data["rho_l"],
+                "rho_v": data["rho_v"],
+                "gamma_mix": data["gamma"],
+            }
+            for i, name in enumerate(component_names):
+                rows[f"x_{name}"]    = [v[i] for v in data["x"]]
+                rows[f"y_{name}"]    = [v[i] for v in data["y"]]
+                # Component-specific partial densities: rho_i^L = x_i * rho_l
+                rows[f"rhoL{i+1}_{name}"] = [
+                    v[i] * rho for v, rho in zip(data["x"], data["rho_l"])
+                ]
+                rows[f"rhoV{i+1}_{name}"] = [
+                    v[i] * rho for v, rho in zip(data["y"], data["rho_v"])
+                ]
+                rows[f"gamma0_{name}"] = [v[i] for v in data["gamma0"]]
+                rows[f"rhoL0_{name}"] = [v[i] for v in data["rhoL0"]]
+                rows[f"rhoV0_{name}"] = [v[i] for v in data["rhoV0"]]
+                rows[f"Psat0_{name}"] = [v[i] for v in data["Psat0"]]
+                rows[f"Tc_{name}"]    = [v[i] for v in data["Tc"]]
+                rows[f"Pc_{name}"]    = [v[i] for v in data["Pc"]]
+                if include_parachor:
+                    rows[f"parachor_{name}"] = [
+                        v[i] if v is not None else None for v in data["parachor"]
+                    ]
+            return pd.DataFrame(rows)
+
+        # ------------------------------------------------------------------
+        # Pad inactive components (zeros) and add feed composition column.
+        # ------------------------------------------------------------------
+        def _pad_and_reorder(
+            df: pd.DataFrame,
+            include_parachor: bool,
+            gamma_col_rename: str,
+        ) -> pd.DataFrame:
+            n_rows = len(df)
+
+            # Feed composition
+            for c in output_components:
+                df[f"z_{c}"] = z_dict.get(c, 0.0)
+
+            # x, y  – zero for inactive
+            for c in output_components:
+                if f"x_{c}" not in df.columns:
+                    df[f"x_{c}"] = 0.0
+                if f"y_{c}" not in df.columns:
+                    df[f"y_{c}"] = 0.0
+
+            # rhoL_i, rhoV_i – re-index to output_components position; zero for inactive
+            _src_rhoL = {c: f"rhoL{i+1}_{c}" for i, c in enumerate(component_names)}
+            _src_rhoV = {c: f"rhoV{i+1}_{c}" for i, c in enumerate(component_names)}
+            for j, c in enumerate(output_components):
+                dst_L, dst_V = f"rhoL{j+1}_{c}", f"rhoV{j+1}_{c}"
+                src_L, src_V = _src_rhoL.get(c), _src_rhoV.get(c)
+                if src_L and src_L in df.columns:
+                    df[dst_L] = df[src_L]
+                    if dst_L != src_L:
+                        df.drop(columns=[src_L], inplace=True)
+                elif dst_L not in df.columns:
+                    df[dst_L] = 0.0
+                if src_V and src_V in df.columns:
+                    df[dst_V] = df[src_V]
+                    if dst_V != src_V:
+                        df.drop(columns=[src_V], inplace=True)
+                elif dst_V not in df.columns:
+                    df[dst_V] = 0.0
+
+            # parachor – zero for inactive
+            if include_parachor:
+                for c in output_components:
+                    if f"parachor_{c}" not in df.columns:
+                        df[f"parachor_{c}"] = 0.0
+
+            # Rename gamma_mix -> method-specific name
+            df = df.rename(columns={"gamma_mix": gamma_col_rename})
+
+            # Build final column order
+            ordered  = ["T", "P"]
+            ordered += [f"z_{c}"         for c in output_components]
+            ordered += ["rho_l", "rho_v"]
+            ordered += [f"x_{c}"         for c in output_components]
+            ordered += [f"y_{c}"         for c in output_components]
+            ordered += [f"rhoL{j+1}_{c}" for j, c in enumerate(output_components)]
+            ordered += [f"rhoV{j+1}_{c}" for j, c in enumerate(output_components)]
+            ordered += [col for col in pure_prop_cols if col in df.columns]
+            if include_parachor:
+                ordered += [f"parachor_{c}" for c in output_components]
+                ordered += ["n_exp"]
+            ordered += [gamma_col_rename]
+            ordered  = [c for c in ordered if c in df.columns]
+            return df[ordered]
+
+        # ------------------------------------------------------------------
+        # Parachor (T-dependent)
+        # ------------------------------------------------------------------
+        df_raw_para = _raw_to_df(data_parachor, include_parachor=True)
+
+        if ML_mode:
+            df_para = _pad_and_reorder(df_raw_para, include_parachor=True,
+                                       gamma_col_rename="gamma_parachor")
+            df_para["n_exp"] = n_exp
+            # Ensure n_exp is placed before gamma (reorder respected)
+            gamma_col = "gamma_parachor"
+            if "n_exp" in df_para.columns and gamma_col in df_para.columns:
+                cols = [c for c in df_para.columns if c not in ("n_exp", gamma_col)]
+                df_para = df_para[cols + ["n_exp", gamma_col]]
+        else:
+            df_para = df_raw_para[["T", "P", "gamma_mix"]].rename(
+                columns={"gamma_mix": "gamma_parachor"})
+
+        df_para = df_para.sort_values("T").reset_index(drop=True)
+        path = os.path.join(output_dir, "PT_parachor.csv")
+        df_para.to_csv(path, index=False)
+        result["PT_parachor"] = df_para
+        print(f"Saved {path} ({len(df_para)} rows, {len(df_para.columns)} cols)")
+
+        # ------------------------------------------------------------------
+        # Parachor (fixed T_ref) – optional
+        # ------------------------------------------------------------------
+        if data_parachor_fixed is not None:
+            df_raw_fixed = _raw_to_df(data_parachor_fixed, include_parachor=True)
+
+            if ML_mode:
+                df_fixed = _pad_and_reorder(df_raw_fixed, include_parachor=True,
+                                            gamma_col_rename="gamma_parachor_fixed")
+                df_fixed["n_exp"] = n_exp
+                gamma_col = "gamma_parachor_fixed"
+                if "n_exp" in df_fixed.columns and gamma_col in df_fixed.columns:
+                    cols = [c for c in df_fixed.columns if c not in ("n_exp", gamma_col)]
+                    df_fixed = df_fixed[cols + ["n_exp", gamma_col]]
+            else:
+                df_fixed = df_raw_fixed[["T", "P", "gamma_mix"]].rename(
+                    columns={"gamma_mix": "gamma_parachor_fixed"})
+
+            df_fixed = df_fixed.sort_values("T").reset_index(drop=True)
+            path = os.path.join(output_dir, "PT_parachor_fixed.csv")
+            df_fixed.to_csv(path, index=False)
+            result["PT_parachor_fixed"] = df_fixed
+            suffix = f" (T_ref={T_ref_fixed} K)" if T_ref_fixed is not None else ""
+            print(f"Saved {path} ({len(df_fixed)} rows, {len(df_fixed.columns)} cols){suffix}")
+
+        # ------------------------------------------------------------------
+        # WSD
+        # ------------------------------------------------------------------
+        df_raw_wsd = _raw_to_df(data_wsd, include_parachor=False)
+
+        if ML_mode:
+            df_wsd = _pad_and_reorder(df_raw_wsd, include_parachor=False,
+                                      gamma_col_rename="gamma_wsd")
+        else:
+            df_wsd = df_raw_wsd[["T", "P", "gamma_mix"]].rename(
+                columns={"gamma_mix": "gamma_wsd"})
+
+        df_wsd = df_wsd.sort_values("T").reset_index(drop=True)
+        path = os.path.join(output_dir, "PT_wsd.csv")
+        df_wsd.to_csv(path, index=False)
+        result["PT_wsd"] = df_wsd
+        print(f"Saved {path} ({len(df_wsd)} rows, {len(df_wsd.columns)} cols)")
+
+        return result
 
     @staticmethod
     def plot_PT_colormap(
