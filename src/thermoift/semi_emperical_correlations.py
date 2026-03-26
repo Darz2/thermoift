@@ -10,12 +10,13 @@
 # UPDATE: 2026-03-25 by Darshan (Added the functionality of compute_saturation_line_IFT in the FEOS Plugin to compare (added but not as a function but as a useage code))
 # UPDATE: 2026-03-25 by Darshan Saved the computed IFT as Dataframes seperate function specific to ML was added
 # UPDATE: 2026-03-25 by claude  Added T-dependent kij_builder/model_map support to compute_PT_colormap_data and compute_saturation_line_IFT
-# TODO (LATER): Add the IFT from the Pxy diagram for the binary mixtures - similar to old paper/package
-# TODO (LATER): Add the metastable limits from the CNT similar to the old paper/parachorpy package
+# UPDATE: 2026-03-26 by claude  Added ColormapDifference class for computing and plotting IFT difference colormaps
+# TODO (LATER): Add the IFT from the Pxy diagram for the binary mixtures - similar to old paper/package as a new file
+# TODO (LATER): Add the metastable limits from the CNT similar to the old paper/parachorpy package as a new files
 
 """
 semi_emperical_correlations.py
-==============================
+==============================m
 Mixture interfacial tension via semi-empirical methods, fully consistent
 with the feos/PC-SAFT framework.
 
@@ -770,6 +771,7 @@ class semi_emperical_correlations:
         recompute_parachor: bool = True,
         kij_builder=None,
         model_map: dict | None = None,
+        T_grid: np.ndarray | None = None,
     ) -> dict:
         """
         Sweep a (T, P) grid inside the two-phase envelope, run a TP flash at
@@ -826,6 +828,11 @@ class semi_emperical_correlations:
         model_map : dict or None, optional
             Maps component pairs to kij model type (e.g., {("CO2","Ar"): "constant"}).
             Only used when kij_builder is not None.
+        T_grid : np.ndarray or None, optional
+            Explicit temperature grid [K] to sweep.  When provided, *n_T* is
+            ignored and these exact temperatures are used.  Pass the same array
+            to the cDFT sweep to guarantee identical (T, P) grids.  Default is
+            None (auto-generate from bubble/dew bounds).
 
         Returns
         -------
@@ -895,7 +902,13 @@ class semi_emperical_correlations:
 
         T_bub_arr, P_bub_arr = zip(*sorted(zip(T_bub, P_bub)))
         T_dew_arr, P_dew_arr = zip(*sorted(zip(T_dew, P_dew)))
-        T_range = np.linspace(min(T_bub), max(T_bub) * 0.999, n_T)
+
+        if T_grid is not None:
+            T_range = np.asarray(T_grid, dtype=float)
+        else:
+            T_min = max(min(T_bub_arr), min(T_dew_arr))
+            T_max = min(max(T_bub_arr), max(T_dew_arr)) * 0.999
+            T_range = np.linspace(T_min, T_max, n_T)
         _cached_T = None
         _current_parachor = parachor_numbers  # start with user-supplied or None
         _current_eos = eos  # may be rebuilt per T when kij_builder is provided
@@ -1696,6 +1709,8 @@ class semi_emperical_correlations:
         all_components: list[str] | None = None,
         data_parachor_fixed: dict | None = None,
         T_ref_fixed: float | None = None,
+        data_cdft: dict | None = None,
+        data_wsd_nocorr: dict | None = None,
     ) -> dict[str, pd.DataFrame]:
         """
         Save PT colormap IFT DataFrames to CSV files, one per method.
@@ -1713,6 +1728,16 @@ class semi_emperical_correlations:
         ----------------------------
         T, P, z_i, rho_l, rho_v, x_i, y_i, rhoL_i, rhoV_i,
         pure_props (main comp only), [parachor_i, n_exp,] gamma
+
+        When *data_cdft* is provided, difference columns are appended as the
+        last column(s):
+
+        - PT_parachor.csv  : ``gamma_cDFT_minus_parachor``
+        - PT_wsd.csv       : ``gamma_cDFT_minus_wsd_corrected``, and if
+          *data_wsd_nocorr* is also given, ``gamma_cDFT_minus_wsd_uncorrected``
+
+        The cDFT gamma values are interpolated onto each SEC method's (T, P)
+        points via cubic ``griddata``.
 
         Parameters
         ----------
@@ -1746,6 +1771,15 @@ class semi_emperical_correlations:
         T_ref_fixed : float or None, optional
             Reference temperature used for fixed parachor numbers; appended
             to the CSV filename suffix in the print statement only.
+        data_cdft : dict or None, optional
+            cDFT scattered data dict with 'T', 'P', 'gamma' keys.  When
+            provided, difference columns (cDFT - SEC) are appended to each
+            output CSV via cubic interpolation.
+        data_wsd_nocorr : dict or None, optional
+            Output of compute_PT_colormap_data with method='wsd' and
+            wsd_correction=False.  When provided together with *data_cdft*,
+            a ``gamma_cDFT_minus_wsd_uncorrected`` column is appended to
+            PT_wsd.csv.
 
         Returns
         -------
@@ -1755,6 +1789,17 @@ class semi_emperical_correlations:
         os.makedirs(output_dir, exist_ok=True)
         result: dict[str, pd.DataFrame] = {}
         feed_z = np.asarray(feed_z, dtype=float)
+
+        # Build cDFT lookup DataFrame for direct merge (no interpolation).
+        # Both cDFT and SEC must use the same (T, P) grid — pass the same
+        # T_grid to compute_PT_colormap_data and to the cDFT sweep.
+        _cdft_df = None
+        if data_cdft is not None:
+            _cdft_df = pd.DataFrame({
+                "T": np.round(np.asarray(data_cdft["T"]), 10),
+                "P": np.round(np.asarray(data_cdft["P"]), 10),
+                "gamma_cDFT": np.asarray(data_cdft["gamma"]),
+            })
 
         output_components = all_components if all_components is not None else component_names
         main_comp         = component_names[main_component_index]
@@ -1883,6 +1928,14 @@ class semi_emperical_correlations:
             df_para = df_raw_para[["T", "P", "gamma_mix"]].rename(
                 columns={"gamma_mix": "gamma_parachor"})
 
+        # Append cDFT - Parachor difference column (direct merge, same grid)
+        if _cdft_df is not None:
+            df_para["T"] = np.round(df_para["T"].values, 10)
+            df_para["P"] = np.round(df_para["P"].values, 10)
+            df_para = df_para.merge(_cdft_df, on=["T", "P"], how="left")
+            df_para["gamma_cDFT_minus_parachor"] = df_para["gamma_cDFT"] - df_para["gamma_parachor"]
+            df_para.drop(columns=["gamma_cDFT"], inplace=True)
+
         df_para = df_para.sort_values("T").reset_index(drop=True)
         path = os.path.join(output_dir, "PT_parachor.csv")
         df_para.to_csv(path, index=False)
@@ -1925,6 +1978,25 @@ class semi_emperical_correlations:
         else:
             df_wsd = df_raw_wsd[["T", "P", "gamma_mix"]].rename(
                 columns={"gamma_mix": "gamma_wsd"})
+
+        # Append cDFT - WSD difference columns (direct merge, same grid)
+        if _cdft_df is not None:
+            df_wsd["T"] = np.round(df_wsd["T"].values, 10)
+            df_wsd["P"] = np.round(df_wsd["P"].values, 10)
+            df_wsd = df_wsd.merge(_cdft_df, on=["T", "P"], how="left")
+            df_wsd["gamma_cDFT_minus_wsd_corrected"] = df_wsd["gamma_cDFT"] - df_wsd["gamma_wsd"]
+            df_wsd.drop(columns=["gamma_cDFT"], inplace=True)
+
+        if _cdft_df is not None and data_wsd_nocorr is not None:
+            df_nc = pd.DataFrame({
+                "T": np.round(np.asarray(data_wsd_nocorr["T"]), 10),
+                "P": np.round(np.asarray(data_wsd_nocorr["P"]), 10),
+                "gamma_wsd_nocorr": np.asarray(data_wsd_nocorr["gamma"]),
+            })
+            df_wsd = df_wsd.merge(df_nc, on=["T", "P"], how="left")
+            df_wsd = df_wsd.merge(_cdft_df, on=["T", "P"], how="left")
+            df_wsd["gamma_cDFT_minus_wsd_uncorrected"] = df_wsd["gamma_cDFT"] - df_wsd["gamma_wsd_nocorr"]
+            df_wsd.drop(columns=["gamma_cDFT", "gamma_wsd_nocorr"], inplace=True)
 
         df_wsd = df_wsd.sort_values("T").reset_index(drop=True)
         path = os.path.join(output_dir, "PT_wsd.csv")
@@ -2125,4 +2197,175 @@ class semi_emperical_correlations:
         ps.style_legend(ax, fontsize=ps.legend_fontsize, loc="best", framealpha=0)
         plt.tight_layout()
 
+        return fig, ax
+
+
+class ColormapDifference:
+    """
+    Compute and plot the difference between two PT-colormap IFT datasets.
+
+    This class takes two datasets produced by
+    ``semi_emperical_correlations.compute_PT_colormap_data`` (or any dict
+    with 'T', 'P', 'gamma' lists) and computes the pointwise difference
+    on a common interpolation grid masked to the two-phase envelope.
+
+    The sign convention is  ``diff = data_A - data_B``.
+
+    Parameters
+    ----------
+    data_A, data_B : dict
+        Each must contain keys 'T', 'P', 'gamma' (lists or arrays).
+    T_bub, P_bub : array-like
+        Bubble-point temperatures [K] and pressures [bar].
+    T_dew, P_dew : array-like
+        Dew-point temperatures [K] and pressures [bar].
+    grid_size : int, optional
+        Resolution of the interpolation grid per axis. Default 200.
+    """
+
+    def __init__(
+        self,
+        data_A: dict,
+        data_B: dict,
+        T_bub,
+        P_bub,
+        T_dew,
+        P_dew,
+        grid_size: int = 200,
+    ):
+        T_A = np.asarray(data_A["T"])
+        P_A = np.asarray(data_A["P"])
+        G_A = np.asarray(data_A["gamma"])
+
+        T_B = np.asarray(data_B["T"])
+        P_B = np.asarray(data_B["P"])
+        G_B = np.asarray(data_B["gamma"])
+
+        # Common grid spanning both datasets
+        T_all = np.concatenate([T_A, T_B])
+        P_all = np.concatenate([P_A, P_B])
+
+        T_lin = np.linspace(T_all.min(), T_all.max(), grid_size)
+        P_lin = np.linspace(P_all.min(), P_all.max(), grid_size)
+        self.T_mesh, self.P_mesh = np.meshgrid(T_lin, P_lin)
+
+        G_A_mesh = griddata((T_A, P_A), G_A, (self.T_mesh, self.P_mesh),
+                            method="cubic", fill_value=np.nan)
+        G_B_mesh = griddata((T_B, P_B), G_B, (self.T_mesh, self.P_mesh),
+                            method="cubic", fill_value=np.nan)
+
+        # Phase-envelope mask
+        env_T = list(T_bub) + list(reversed(list(T_dew)))
+        env_P = list(P_bub) + list(reversed(list(P_dew)))
+        envelope_path = MplPath(np.column_stack([env_T, env_P]))
+        pts = np.column_stack([self.T_mesh.ravel(), self.P_mesh.ravel()])
+        self.inside = envelope_path.contains_points(pts).reshape(self.T_mesh.shape)
+        self.inside_eroded = binary_erosion(self.inside, iterations=2)
+
+        diff = G_A_mesh - G_B_mesh
+        self.diff_masked = np.ma.masked_where(
+            ~self.inside | np.isnan(diff), diff
+        )
+        self.diff_eroded = np.ma.masked_where(
+            ~self.inside_eroded | np.isnan(diff), diff
+        )
+
+    def plot(
+        self,
+        Tc_K: float,
+        Pc_bar: float,
+        T_bub=None,
+        P_bub=None,
+        T_dew=None,
+        P_dew=None,
+        label: str = "",
+        isoline_step: int = 1,
+    ) -> tuple[plt.Figure, plt.Axes] | tuple[None, None]:
+        """
+        Plot the difference colormap with iso-difference lines and
+        the phase envelope overlay.
+
+        Parameters
+        ----------
+        Tc_K : float
+            Mixture critical temperature [K].
+        Pc_bar : float
+            Mixture critical pressure [bar].
+        T_bub, P_bub : array-like, optional
+            Bubble curve for overlay. If *None*, the envelope is not drawn.
+        T_dew, P_dew : array-like, optional
+            Dew curve for overlay. If *None*, the envelope is not drawn.
+        label : str, optional
+            Title text, e.g. ``"cDFT - Parachor"``.
+        isoline_step : int, optional
+            Spacing [mN/m] between iso-difference contour lines. Default 1.
+
+        Returns
+        -------
+        fig, ax or (None, None) if insufficient data.
+        """
+        if self.diff_masked.count() < 4:
+            warnings.warn(
+                f"[ColormapDifference.plot] '{label}' — fewer than 4 "
+                "valid points, skipping."
+            )
+            return None, None
+
+        vmin = float(np.nanmin(self.diff_masked))
+        vmax = float(np.nanmax(self.diff_masked))
+        vlim = max(abs(vmin), abs(vmax))
+
+        fig, ax = ps.plot_init()
+
+        levels_fill = np.linspace(-vlim, vlim, 35)
+        cf = ax.contourf(
+            self.T_mesh, self.P_mesh, self.diff_masked,
+            levels=levels_fill, cmap="RdBu_r", extend="both",
+        )
+
+        levels_lines = [
+            n for n in range(-int(vlim), int(vlim) + 1, isoline_step)
+            if vmin <= n <= vmax
+        ]
+
+        if levels_lines:
+            cl = ax.contour(
+                self.T_mesh, self.P_mesh, self.diff_eroded,
+                levels=levels_lines, colors="black",
+                linestyles="solid", linewidths=ps.linewidth / 2, alpha=0.6,
+            )
+            ax.clabel(
+                cl, levels=levels_lines, inline=True,
+                fontsize=ps.label_fontsize / 2, fmt="%.0f",
+                inline_spacing=15, rightside_up=True,
+            )
+
+        cbar = fig.colorbar(cf, ax=ax, pad=0.02, format="%.1f")
+        cbar.set_label(
+            r"$\Delta\gamma \; / \; [\mathrm{mN \, m^{-1}}]$",
+            fontsize=ps.label_fontsize,
+        )
+        cbar.ax.tick_params(labelsize=10)
+
+        if T_bub is not None:
+            ax.plot(T_bub, P_bub, "b-", linewidth=ps.linewidth,
+                    label="Bubble curve", zorder=10)
+        if T_dew is not None:
+            ax.plot(T_dew, P_dew, "r-", linewidth=ps.linewidth,
+                    label="Dew curve", zorder=10)
+
+        ax.plot(Tc_K, Pc_bar, "o", markersize=4, zorder=15,
+                markerfacecolor="grey", markeredgewidth=1,
+                markeredgecolor="black", label="Critical point")
+
+        ax.set_xlabel(r"$T \; / \; [\mathrm{K}]$", fontsize=ps.label_fontsize)
+        ax.set_ylabel(r"$P \; / \; [\mathrm{bar}]$", fontsize=ps.label_fontsize)
+        ax.set_xlim(left=200)
+        ax.minorticks_on()
+        ps.style_legend(ax, fontsize=ps.legend_fontsize, loc="best", framealpha=0)
+
+        if label:
+            ax.set_title(f"IFT Difference: {label}", fontsize=ps.label_fontsize)
+
+        fig.tight_layout()
         return fig, ax
