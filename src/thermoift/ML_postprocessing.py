@@ -31,6 +31,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.ticker import AutoMinorLocator
 from sklearn.metrics import r2_score, mean_squared_error
+import seaborn as sns
 
 from . import PLOT_SETTINGS as ps
 
@@ -52,6 +53,13 @@ TARGET_COLORS = {
         "edgecolor": "darkblue",
         "hist_color": "blue",
     },
+}
+
+# Colors for train/test/validation splits in parity plots
+SPLIT_COLORS = {
+    "train": {"facecolor": "lightgray", "edgecolor": "gray"},
+    "test": {"facecolor": "lightblue", "edgecolor": "darkblue"},
+    "val": {"facecolor": "#FF6B6B", "edgecolor": "darkred"},
 }
 
 # Default colors (green for gamma)
@@ -156,8 +164,24 @@ class MLPostprocessing:
         feature_importances: Optional[Union[np.ndarray, List]] = None,
         feature_names: Optional[List[str]] = None,
         label_map: Optional[dict] = None,
+        datasets: Optional[dict] = None,
     ):
-        """Initialize MLPostprocessing with predictions and optional feature importances."""
+        """
+        Initialize MLPostprocessing with predictions and optional feature importances.
+
+        Parameters
+        ----------
+        datasets : dict, optional
+            Dictionary with train/test/val splits, e.g.::
+
+                {
+                    "train": (y_train, y_train_pred),
+                    "test":  (y_test,  y_test_pred),
+                    "val":   (y_val,   y_val_pred),
+                }
+
+            Used by ``plot_parity`` to show all splits on one plot.
+        """
         self.y_true = np.asarray(y_true)
         self.y_pred = np.asarray(y_pred)
         self._target = target.lower()
@@ -176,6 +200,9 @@ class MLPostprocessing:
 
         # Label map for feature names
         self._label_map = label_map or {}
+
+        # Optional train/test/val datasets for parity plot
+        self._datasets = datasets
 
         # Set colors based on target
         self.colors = TARGET_COLORS.get(self._target, DEFAULT_COLORS)
@@ -217,6 +244,7 @@ class MLPostprocessing:
         scale: Literal["linear", "log"] = "linear",
         color: Optional[str] = None,
         save_path: Optional[str] = None,
+        folder: str = "PLOTS",
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Plot feature importance as horizontal bar chart.
@@ -303,7 +331,7 @@ class MLPostprocessing:
         plt.tight_layout()
 
         if save_path:
-            ps.save_plot(fig, save_path)
+            ps.save_plot(fig, save_path, folder=folder)
 
         plt.show()
         return fig, ax
@@ -312,14 +340,20 @@ class MLPostprocessing:
         self,
         model_name: str = "Model",
         save_path: Optional[str] = None,
+        folder: str = "PLOTS",
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Plot parity plot (actual vs predicted).
 
+        If ``datasets`` was provided during initialization, each split
+        (train / test / val) is plotted with distinct colors and its
+        own R² is shown in the legend.  Otherwise, a single scatter
+        of ``y_true`` vs ``y_pred`` is drawn.
+
         Parameters
         ----------
         model_name : str, default "Model"
-            Name of the model for legend.
+            Name of the model for legend (used only when no datasets).
         save_path : str, optional
             Base filename to save the figure.
 
@@ -330,26 +364,52 @@ class MLPostprocessing:
         """
         fig, ax = ps.plot_init()
 
-        # Calculate limits
-        lims = [
-            min(self.y_true.min(), self.y_pred.min()),
-            max(self.y_true.max(), self.y_pred.max())
-        ]
-        lims = [lims[0] - 0.5, lims[1] + 0.5]
+        if self._datasets is not None:
+            # Collect all values for axis limits
+            all_true, all_pred = [], []
+            split_labels = {"train": "Train", "test": "Test", "val": "Validation"}
 
-        # Scatter plot
-        ax.scatter(
-            self.y_true, self.y_pred,
-            alpha=0.8, s=20,
-            facecolors=self.colors["facecolor"],
-            edgecolors=self.colors["edgecolor"],
-            linewidths=0.6,
-            label=model_name
-        )
+            for key in ["train", "test", "val"]:
+                if key not in self._datasets:
+                    continue
+                y_t, y_p = np.asarray(self._datasets[key][0]), np.asarray(self._datasets[key][1])
+                all_true.append(y_t)
+                all_pred.append(y_p)
+
+                colors = SPLIT_COLORS[key]
+                r2 = r2_score(y_t, y_p)
+                ax.scatter(
+                    y_t, y_p,
+                    alpha=0.8, s=20,
+                    facecolors=colors["facecolor"],
+                    edgecolors=colors["edgecolor"],
+                    linewidths=0.6,
+                    label=rf"{split_labels[key]} ($R^2$ = {r2:.2f})",
+                )
+
+            all_true = np.concatenate(all_true)
+            all_pred = np.concatenate(all_pred)
+            lims = [
+                min(all_true.min(), all_pred.min()) - 0.5,
+                max(all_true.max(), all_pred.max()) + 0.5,
+            ]
+        else:
+            # Single scatter (backward-compatible)
+            lims = [
+                min(self.y_true.min(), self.y_pred.min()) - 0.5,
+                max(self.y_true.max(), self.y_pred.max()) + 0.5,
+            ]
+            ax.scatter(
+                self.y_true, self.y_pred,
+                alpha=0.8, s=20,
+                facecolors=self.colors["facecolor"],
+                edgecolors=self.colors["edgecolor"],
+                linewidths=0.6,
+                label=rf"{model_name} ($R^2$ = {self.r2:.4f})",
+            )
 
         # Perfect prediction line
         ax.plot(lims, lims, "k--", linewidth=1.4, label="Perfect prediction")
-
         ax.set_xlim(lims)
         ax.set_ylim(lims)
 
@@ -359,17 +419,11 @@ class MLPostprocessing:
 
         ps.apply_axis_style(ax)
 
-        # Add R2 to legend
-        dummy_r2 = Line2D([], [], linestyle="none", label=rf"$R^2$ = {self.r2:.2f}")
-        handles, labels = ax.get_legend_handles_labels()
-        handles.append(dummy_r2)
-
         ax.legend(
-            handles=handles,
             fontsize=ps.label_fontsize * 0.65,
             loc="upper left",
             edgecolor="black",
-            framealpha=1.0
+            framealpha=1.0,
         )
 
         ax.minorticks_on()
@@ -380,7 +434,7 @@ class MLPostprocessing:
         plt.tight_layout()
 
         if save_path:
-            ps.save_plot(fig, save_path)
+            ps.save_plot(fig, save_path, folder=folder)
 
         plt.show()
         return fig, ax
@@ -389,6 +443,7 @@ class MLPostprocessing:
         self,
         bins: int = 40,
         save_path: Optional[str] = None,
+        folder: str = "PLOTS",
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Plot histogram of residuals.
@@ -411,8 +466,8 @@ class MLPostprocessing:
             self.residuals,
             bins=bins,
             alpha=0.75,
-            color=self.colors["hist_color"],
-            edgecolor="black",
+            facecolor=self.colors["facecolor"],
+            edgecolor=self.colors["edgecolor"],
             linewidth=0.8,
             label="Residuals"
         )
@@ -430,13 +485,13 @@ class MLPostprocessing:
         # Add statistics text box
         unit = target_label.split('/')[-1].strip() if '/' in target_label else ""
         textstr = (
-            f"Mean = {mean_resid:.4f} {unit}\n"
-            f"Std Dev = {std_resid:.4f} {unit}\n"
-            f"RMSE = {self.rmse:.3f} {unit}"
+            f"Mean = {mean_resid:.2f} / {unit}\n"
+            f"Std Dev = {std_resid:.2f} / {unit}\n"
+            f"RMSE = {self.rmse:.2f} / {unit}"
         )
 
         ax.text(
-            0.02, 0.8, textstr,
+            0.025, 0.9, textstr,
             transform=ax.transAxes,
             fontsize=6,
             verticalalignment='top',
@@ -445,15 +500,15 @@ class MLPostprocessing:
 
         ps.apply_axis_style(ax)
 
-        handles, labels = ax.get_legend_handles_labels()
-        ax.legend(
-            handles=handles,
-            fontsize=ps.label_fontsize * 0.5,
-            loc="upper right",
-            edgecolor="black",
-            facecolor="white",
-            framealpha=1.0
-        )
+        # handles, labels = ax.get_legend_handles_labels()
+        # ax.legend(
+        #     handles=handles,
+        #     fontsize=ps.label_fontsize * 0.5,
+        #     loc="upper right",
+        #     edgecolor="black",
+        #     facecolor="white",
+        #     framealpha=1.0
+        # )
 
         ax.minorticks_on()
         ax.xaxis.set_minor_locator(AutoMinorLocator(2))
@@ -463,7 +518,7 @@ class MLPostprocessing:
         plt.tight_layout()
 
         if save_path:
-            ps.save_plot(fig, save_path)
+            ps.save_plot(fig, save_path, folder=folder)
 
         plt.show()
         return fig, ax
@@ -471,6 +526,7 @@ class MLPostprocessing:
     def plot_residual_vs_predicted(
         self,
         save_path: Optional[str] = None,
+        folder: str = "PLOTS",
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Plot residuals vs predicted values.
@@ -496,13 +552,13 @@ class MLPostprocessing:
             label="Residuals"
         )
 
-        ax.axhline(0, color="black", linewidth=1.3, linestyle="--", label="Zero residual")
-        ax.axhline(self.rmse, color="blue", linewidth=1.1, linestyle="-.", alpha=0.85,
-                   label=rf"$\pm$RMSE = {self.rmse:.3f}")
-        ax.axhline(-self.rmse, color="blue", linewidth=1.1, linestyle="-.", alpha=0.85)
-
         target_label = self._get_target_label()
         unit = target_label.split('/')[-1].strip() if '/' in target_label else ""
+
+        ax.axhline(0, color="black", linewidth=1.3, linestyle="--", label="Zero residual")
+        ax.axhline(self.rmse, color="blue", linewidth=1.1, linestyle="-.", alpha=0.85,
+                   label=rf"$\pm$RMSE = {self.rmse:.2f} / {unit}")
+        ax.axhline(-self.rmse, color="blue", linewidth=1.1, linestyle="-.", alpha=0.85)
         ax.set_xlabel(f"Predicted {target_label}", fontsize=ps.label_fontsize * 0.9)
         ax.set_ylabel(f"Residual / {unit}", fontsize=ps.label_fontsize * 0.9)
 
@@ -517,7 +573,7 @@ class MLPostprocessing:
         plt.tight_layout()
 
         if save_path:
-            ps.save_plot(fig, save_path)
+            ps.save_plot(fig, save_path, folder=folder)
 
         plt.show()
         return fig, ax
@@ -567,3 +623,154 @@ class MLPostprocessing:
                 pct = (imp / self._feature_importances.sum()) * 100
                 bar = "█" * int(pct / 2)
                 print(f"  {name:25s} | {pct:6.2f}% | {bar}")
+
+
+def print_model_metrics(
+    y_train: Union[np.ndarray, pd.Series],
+    y_train_pred: np.ndarray,
+    y_test: Union[np.ndarray, pd.Series],
+    y_test_pred: np.ndarray,
+    target: str,
+    unit: str = "bar",
+    y_val: Optional[Union[np.ndarray, pd.Series]] = None,
+    y_val_pred: Optional[np.ndarray] = None,
+) -> dict:
+    """
+    Compute and print train/test/validation metrics for a regression model.
+
+    Parameters
+    ----------
+    y_train : array-like
+        True training target values.
+    y_train_pred : array-like
+        Predicted training target values.
+    y_test : array-like
+        True test target values.
+    y_test_pred : array-like
+        Predicted test target values.
+    target : str
+        Target variable name (for display).
+    unit : str, default "bar"
+        Unit string for RMSE/MAE display.
+    y_val : array-like, optional
+        True validation target values.
+    y_val_pred : array-like, optional
+        Predicted validation target values.
+
+    Returns
+    -------
+    dict
+        Dictionary with train/test(/val) R², RMSE, and MAE values.
+    """
+    metrics = {
+        "train_r2": r2_score(y_train, y_train_pred),
+        "test_r2": r2_score(y_test, y_test_pred),
+        "train_rmse": np.sqrt(mean_squared_error(y_train, y_train_pred)),
+        "test_rmse": np.sqrt(mean_squared_error(y_test, y_test_pred)),
+        "train_mae": np.mean(np.abs(np.asarray(y_train) - np.asarray(y_train_pred))),
+        "test_mae": np.mean(np.abs(np.asarray(y_test) - np.asarray(y_test_pred))),
+    }
+
+    print("=" * 60)
+    print(f"Model Performance for {target}")
+    print("=" * 60)
+    print(f"\nTraining Set:")
+    print(f"  R²:   {metrics['train_r2']:.6f}")
+    print(f"  RMSE: {metrics['train_rmse']:.6f} {unit}")
+    print(f"  MAE:  {metrics['train_mae']:.6f} {unit}")
+    print(f"\nTest Set:")
+    print(f"  R²:   {metrics['test_r2']:.6f}")
+    print(f"  RMSE: {metrics['test_rmse']:.6f} {unit}")
+    print(f"  MAE:  {metrics['test_mae']:.6f} {unit}")
+
+    if y_val is not None and y_val_pred is not None:
+        metrics["val_r2"] = r2_score(y_val, y_val_pred)
+        metrics["val_rmse"] = np.sqrt(mean_squared_error(y_val, y_val_pred))
+        metrics["val_mae"] = np.mean(np.abs(np.asarray(y_val) - np.asarray(y_val_pred)))
+        print(f"\nValidation Set:")
+        print(f"  R²:   {metrics['val_r2']:.6f}")
+        print(f"  RMSE: {metrics['val_rmse']:.6f} {unit}")
+        print(f"  MAE:  {metrics['val_mae']:.6f} {unit}")
+
+    return metrics
+
+
+def plot_correlation_heatmap(
+    df: pd.DataFrame,
+    features: List[str],
+    target: str,
+    method: str = "spearman",
+    save_path: Optional[str] = None,
+    folder: str = "PLOTS",
+) -> Tuple[plt.Figure, plt.Axes]:
+    """
+    Plot a correlation heatmap for features and target.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing the data.
+    features : List[str]
+        List of feature column names.
+    target : str
+        Target column name.
+    method : str, default "spearman"
+        Correlation method ("pearson", "spearman", or "kendall").
+    save_path : str, optional
+        Base filename to save the figure.
+
+    Returns
+    -------
+    Tuple[plt.Figure, plt.Axes]
+        Figure and axes objects.
+    """
+    columns = features + [target]
+
+    # Print correlation with target
+    corr_with_target = df[columns].corr()[target].drop(target).sort_values(ascending=False)
+    print(f"Feature correlations with {target}:")
+    print(corr_with_target)
+
+    # Build label map from PLOT_SETTINGS symbol_map
+    label_map = {
+        col: f"${ps.symbol_map[col.lower()]}$"
+        for col in columns
+        if col.lower() in ps.symbol_map
+    }
+
+    # Correlation heatmap
+    numeric_cols = [col for col in columns if df[col].nunique() > 1]
+    corr_matrix = df[numeric_cols].corr(method=method)
+    corr_matrix = corr_matrix.rename(index=label_map, columns=label_map)
+    mask = np.triu(np.ones_like(corr_matrix, dtype=bool), k=1)
+
+    fig, ax = ps.plot_init()
+
+    cm = sns.heatmap(
+        corr_matrix,
+        ax=ax,
+        annot=True,
+        fmt=".2f",
+        cmap=ps.map,
+        center=0,
+        mask=mask,
+        square=True,
+        linewidths=0.5,
+        annot_kws={"size": 6},
+        cbar_kws={"shrink": 1},
+    )
+
+    cbar = cm.collections[0].colorbar
+    ps.style_colorbar(cbar)
+    ps.apply_axis_style(ax)
+    ax.tick_params(axis="both", length=0)
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
+    ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
+
+    plt.tight_layout()
+
+    if save_path:
+        ps.save_plot(fig, save_path, folder=folder)
+
+    plt.show()
+    return fig, ax

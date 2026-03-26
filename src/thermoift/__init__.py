@@ -2,7 +2,7 @@ import importlib as _importlib
 
 from .ML_feeds import FeedsBuilder
 from .ML_preprocessing import MLPreprocessing
-from .ML_postprocessing import MLPostprocessing
+from .ML_postprocessing import MLPostprocessing, plot_correlation_heatmap, print_model_metrics
 from . import rng_utils
 
 def __getattr__(name):
