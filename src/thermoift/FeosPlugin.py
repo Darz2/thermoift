@@ -687,41 +687,134 @@ class VLECalculator:
     """Vapor-liquid equilibrium calculations."""
 
     @staticmethod
-    def compute_bubble_curve(eos, T_vals, feed, verbose):
+    def _clean_envelope_curve(T_arr, P_arr, T_other=None, P_other=None,
+                               Tc=None, tol_trivial=1e-4, tol_critical=0.995):
         """
-        Calculate bubble point pressures across a temperature range.
+        Remove non-physical and spurious points from a bubble or dew curve.
+
+        Step 1 — physical filter: drop any point where P is not finite
+        or P < 1e-6 bar (catches silent EOS failures such as P ~ 1e-237 bar,
+        which are positive and finite but physically impossible).
+
+        Step 2 — trivial-solution filter (requires the paired curve):
+        At any temperature where the dew pressure ≈ bubble pressure, the
+        EOS has converged both phases to the same state — a trivial solution.
+        Such points are discarded unless they are close to the critical
+        temperature (T / Tc > tol_critical), where phase pressures are
+        expected to merge physically.
 
         Parameters
         ----------
-        eos : feos.EquationOfState
-            Equation of state
+        T_arr, P_arr : array-like
+            The curve to clean (temperatures [K] and pressures [bar]).
+        T_other, P_other : array-like, optional
+            The paired curve (bubble when cleaning dew, or vice versa).
+            Required for Step 2.
+        Tc : float, optional
+            Critical temperature [K]. Required for Step 2.
+        tol_trivial : float
+            Relative tolerance |P - P_other| / P_other below which the
+            two pressures are considered identical (default 1e-4).
+        tol_critical : float
+            T / Tc above which the trivial-solution check is skipped
+            (default 0.995, i.e. within 0.5 % of Tc).
+
+        Returns
+        -------
+        T_clean, P_clean : np.ndarray
+        """
+        T = np.asarray(T_arr, dtype=float)
+        P = np.asarray(P_arr, dtype=float)
+
+        # Step 1: physical validity — require finite and physically meaningful pressure.
+        # P > 1e-6 bar rejects silent EOS failures (e.g. P ~ 1e-237 bar) which are
+        # positive and finite but far below any real hydrocarbon/CO2 vapor pressure.
+        mask = np.isfinite(P) & (P > 1e-6)
+        T, P = T[mask], P[mask]
+
+        if len(P) == 0:
+            return T, P
+
+        # Step 2: trivial-solution cross-check
+        if T_other is not None and P_other is not None and Tc is not None:
+            T_oth = np.asarray(T_other, dtype=float)
+            P_oth = np.asarray(P_other, dtype=float)
+
+            if len(T_oth) >= 2:
+                P_oth_interp = np.interp(T, T_oth, P_oth,
+                                          left=np.nan, right=np.nan)
+                near_critical = T / Tc >= tol_critical
+                trivial = (np.abs(P - P_oth_interp) / (P_oth_interp + 1e-30)
+                           < tol_trivial)
+                keep = near_critical | ~trivial
+                T, P = T[keep], P[keep]
+
+        return T, P
+
+    @staticmethod
+    def compute_bubble_curve(eos_or_fn, T_vals, feed, verbose):
+        """
+        Calculate bubble point pressures across a temperature range.
+
+        Supports **continuation**: each temperature step uses the previous
+        successful solution as a warm start (``tp_init`` + ``vapor_molefracs``),
+        keeping the solver on the correct branch all the way to Tc.
+
+        Parameters
+        ----------
+        eos_or_fn : feos.EquationOfState or callable
+            Either a fixed EOS object (original behaviour) or a callable
+            ``T_K -> eos`` that builds a T-dependent EOS at each step.
+            Pass a callable when using T-dependent binary-interaction parameters.
         T_vals : array-like
-            Temperature values [K]
+            Temperature values [K], ideally sorted ascending.
         feed : array-like
-            Feed composition (mole fractions)
+            Feed composition (mole fractions, with si.MOL units).
         verbose : bool
-            Print error messages if True
+            Print per-temperature error messages if True.
 
         Returns
         -------
         T_bubble : list
-            Temperatures where bubble point was computed
+            Temperatures where bubble point was computed [K].
         bubble_pressures : list
-            Bubble point pressures [bar]
+            Bubble point pressures [bar].
         """
-        feed = np.array(feed / si.MOL)
+        feed_arr = np.array(feed / si.MOL)
         bubble_pressures = []
         T_bubble = []
 
+        # Continuation state: warm-start each step from the previous solution
+        P_prev = None   # bar
+        y_prev = None   # vapor mole fracs (dimensionless np.array)
+
         for T_K in T_vals:
             T = T_K * si.KELVIN
+            # Build EOS: callable for T-dependent kij, fixed object otherwise
+            eos = eos_or_fn(T_K) if callable(eos_or_fn) else eos_or_fn
+
             try:
+                kwargs = {}
+                if P_prev is not None:
+                    kwargs['tp_init'] = P_prev * si.BAR
+                if y_prev is not None:
+                    kwargs['vapor_molefracs'] = y_prev
+
                 envelope = feos.PhaseEquilibrium.bubble_point(
-                    eos, temperature_or_pressure=T, liquid_molefracs=feed)
+                    eos, temperature_or_pressure=T,
+                    liquid_molefracs=feed_arr, **kwargs)
                 P_bubble = envelope.liquid.pressure()
+
+                # Update continuation state for next step
+                P_prev = float(P_bubble / si.BAR)
+                y_prev = np.array(envelope.vapor.molefracs, dtype=float)
+
             except Exception as err:
                 if verbose:
                     print(f"Bubble calculation failed at T = {T_K} K: {err}")
+                # Reset continuation state so the next attempt uses no initial guess
+                P_prev = None
+                y_prev = None
                 continue
 
             bubble_pressures.append(P_bubble / si.BAR)
@@ -730,47 +823,164 @@ class VLECalculator:
         return T_bubble, bubble_pressures
 
     @staticmethod
-    def compute_dew_curve(eos, T_vals, feed, verbose):
+    def compute_dew_curve(eos_or_fn, T_vals, feed, verbose):
         """
         Calculate dew point pressures across a temperature range.
 
+        Supports **continuation**: each temperature step uses the previous
+        successful solution as a warm start (``tp_init`` + ``liquid_molefracs``),
+        preventing the solver from jumping to a wrong branch near Tc.
+
         Parameters
         ----------
-        eos : feos.EquationOfState
-            Equation of state
+        eos_or_fn : feos.EquationOfState or callable
+            Either a fixed EOS object (original behaviour) or a callable
+            ``T_K -> eos`` that builds a T-dependent EOS at each step.
         T_vals : array-like
-            Temperature values [K]
+            Temperature values [K], ideally sorted ascending.
         feed : array-like
-            Feed composition (mole fractions)
+            Feed composition (mole fractions, with si.MOL units).
         verbose : bool
-            Print error messages if True
+            Print per-temperature error messages if True.
 
         Returns
         -------
         T_dew : list
-            Temperatures where dew point was computed
+            Temperatures where dew point was computed [K].
         dew_pressures : list
-            Dew point pressures [bar]
+            Dew point pressures [bar].
         """
-        feed = np.array(feed / si.MOL)
+        feed_arr = np.array(feed / si.MOL)
         T_dew = []
         dew_pressures = []
 
+        # Continuation state
+        P_prev = None   # bar
+        x_prev = None   # liquid mole fracs (dimensionless np.array)
+
         for T_K in T_vals:
             T = T_K * si.KELVIN
+            eos = eos_or_fn(T_K) if callable(eos_or_fn) else eos_or_fn
+
             try:
+                kwargs = {}
+                if P_prev is not None:
+                    kwargs['tp_init'] = P_prev * si.BAR
+                if x_prev is not None:
+                    kwargs['liquid_molefracs'] = x_prev
+
                 envelope = feos.PhaseEquilibrium.dew_point(
-                    eos, temperature_or_pressure=T, vapor_molefracs=feed)
+                    eos, temperature_or_pressure=T,
+                    vapor_molefracs=feed_arr, **kwargs)
                 P_dew = envelope.vapor.pressure()
+
+                # Update continuation state for next step
+                P_prev = float(P_dew / si.BAR)
+                x_prev = np.array(envelope.liquid.molefracs, dtype=float)
+
             except Exception as err:
                 if verbose:
                     print(f"Dew calculation failed at T = {T_K} K: {err}")
-                break
+                # Reset continuation state and continue (was incorrectly 'break')
+                P_prev = None
+                x_prev = None
+                continue
 
             dew_pressures.append(P_dew / si.BAR)
             T_dew.append(T_K)
 
         return T_dew, dew_pressures
+
+    @staticmethod
+    def make_eos_factory(components, builder, model_map):
+        """
+        Return a ``T_K -> eos`` callable that builds a fresh PC-SAFT EOS
+        with T-dependent binary-interaction parameters at each temperature.
+
+        Parameters
+        ----------
+        components : list of str
+            Active component names.
+        builder : object
+            KIJ builder passed to :func:`PARAMETERS`.
+        model_map : dict
+            Reduced KIJ map for the active components.
+
+        Returns
+        -------
+        callable
+            A function ``(T_K: float) -> feos.HelmholtzEnergyFunctional``.
+        """
+        def _factory(T_K, _c=components, _b=builder, _m=model_map):
+            params = ParameterBuilder.build_parameters(_c, T_K=float(T_K),
+                                                       kij_builder=_b, model_map=_m)
+            return feos.HelmholtzEnergyFunctional.pcsaft(params)
+        return _factory
+
+    @staticmethod
+    def make_T_grid(T_min, Tc_K, N_T):
+        """
+        Build a non-uniform temperature grid with denser spacing near Tc.
+
+        Half the points span ``[T_min, 0.95·Tc]`` and the other half span
+        ``[0.95·Tc, Tc]``, concentrating resolution in the critical region
+        where branch-jumping is most likely.
+
+        Parameters
+        ----------
+        T_min : float
+            Lowest temperature [K].
+        Tc_K : float
+            Critical temperature [K].
+        N_T : int
+            Total number of points (approximate; duplicates at 0.95·Tc removed).
+
+        Returns
+        -------
+        T_values : np.ndarray
+        """
+        half = max(2, N_T // 2)
+        T_lower = np.linspace(T_min, Tc_K * 0.95, half)
+        T_upper = np.linspace(Tc_K * 0.95, Tc_K, half)
+        return np.unique(np.concatenate([T_lower, T_upper]))
+
+    @staticmethod
+    def compute_phase_envelope(eos_or_fn, T_vals, feed, verbose, Tc=None):
+        """
+        Compute bubble and dew curves together and apply joint cleaning.
+
+        Runs ``compute_bubble_curve`` and ``compute_dew_curve``, applies
+        Step 1 (non-physical filter) and Step 2 (trivial-solution
+        cross-check) via ``_clean_envelope_curve``.
+
+        Parameters
+        ----------
+        eos_or_fn : feos.EquationOfState or callable
+            A fixed EOS object or a ``T_K -> eos`` callable (e.g. from
+            :meth:`make_eos_factory`) for T-dependent binary parameters.
+        T_vals : array-like
+            Temperature grid [K]
+        feed : array-like
+            Feed composition
+        verbose : bool
+        Tc : float, optional
+            Critical temperature [K] for the trivial-solution check.
+
+        Returns
+        -------
+        T_bub, P_bub, T_dew, P_dew : list
+        """
+        T_bub_raw, P_bub_raw = VLECalculator.compute_bubble_curve(eos_or_fn, T_vals, feed, verbose)
+        T_dew_raw, P_dew_raw = VLECalculator.compute_dew_curve(eos_or_fn, T_vals, feed, verbose)
+
+        T_bub, P_bub = VLECalculator._clean_envelope_curve(
+            T_bub_raw, P_bub_raw,
+            T_other=T_dew_raw, P_other=P_dew_raw, Tc=Tc)
+        T_dew, P_dew = VLECalculator._clean_envelope_curve(
+            T_dew_raw, P_dew_raw,
+            T_other=T_bub_raw, P_other=P_bub_raw, Tc=Tc)
+
+        return list(T_bub), list(P_bub), list(T_dew), list(P_dew)
 
     @staticmethod
     def compute_critical_point(eos, z, T_guess):
@@ -1096,7 +1306,8 @@ class DataProcessor:
         return summary
 
     @staticmethod
-    def export_to_csv(VLE_DFT, folder="CSV", verbose=False):
+    def export_to_csv(VLE_DFT, folder="CSV", verbose=False,
+                      filename_interfacial=None, filename_envelope=None):
         """
         Save VLE-DFT interfacial and phase envelope data to CSV files
         in separate subfolders.
@@ -1109,6 +1320,12 @@ class DataProcessor:
             Output root folder for CSV files
         verbose : bool
             Print progress if True
+        filename_interfacial : str, optional
+            Base filename (without extension) for interfacial results CSV.
+            Defaults to ``{feed_key}_interfacial_results``.
+        filename_envelope : str, optional
+            Base filename (without extension) for phase envelope CSV.
+            Defaults to ``{feed_key}_phase_envelope``.
 
         Returns
         -------
@@ -1130,37 +1347,35 @@ class DataProcessor:
 
         for feed_key in VLE_DFT:
             try:
-                # Save interfacial data
-                all_data = []
-                for T_K, data_list in VLE_DFT[feed_key]["interfacial_data"].items():
-                    all_data.extend(data_list)
+                saved_files[feed_key] = {}
 
-                df = pd.DataFrame(all_data)
-                csv_filename = os.path.join(
-                    interfacial_folder,
-                    f"{feed_key}_interfacial_results.csv"
-                )
-                df.to_csv(csv_filename, index=False)
+                # Save interfacial data (skip if filename_interfacial is None)
+                if filename_interfacial is not None:
+                    all_data = []
+                    for T_K, data_list in VLE_DFT[feed_key]["interfacial_data"].items():
+                        all_data.extend(data_list)
 
-                if verbose:
-                    print(f"Saved {len(df)} rows to {csv_filename}")
+                    df = pd.DataFrame(all_data)
+                    csv_filename = os.path.join(interfacial_folder, f"{filename_interfacial}.csv")
+                    df.to_csv(csv_filename, index=False)
 
-                # Save phase envelope data
-                envelope_filename = os.path.join(
-                    envelope_folder,
-                    f"{feed_key}_phase_envelope.csv"
-                )
-                pd.DataFrame(
-                    VLE_DFT[feed_key]["phase_envelope"]["isothermal_lines"]
-                ).to_csv(envelope_filename, index=False)
+                    if verbose:
+                        print(f"Saved {len(df)} rows to {csv_filename}")
 
-                if verbose:
-                    print(f"Saved phase envelope data to {envelope_filename}")
+                    saved_files[feed_key]["interfacial"] = csv_filename
 
-                saved_files[feed_key] = {
-                    "interfacial": csv_filename,
-                    "envelope": envelope_filename
-                }
+                # Save phase envelope data (skip if filename_envelope is None)
+                if filename_envelope is not None:
+                    env = VLE_DFT[feed_key]["phase_envelope"]
+                    bub_rows = [{"curve": "bubble", **pt} for pt in env.get("bubble_curve", [])]
+                    dew_rows = [{"curve": "dew",    **pt} for pt in env.get("dew_curve",    [])]
+                    envelope_filename = os.path.join(envelope_folder, f"{filename_envelope}.csv")
+                    pd.DataFrame(bub_rows + dew_rows).to_csv(envelope_filename, index=False)
+
+                    if verbose:
+                        print(f"Saved phase envelope data to {envelope_filename}")
+
+                    saved_files[feed_key]["envelope"] = envelope_filename
 
             except Exception as e:
                 print(f"Warning: Could not save CSV for {feed_key}: {e}")
@@ -1177,11 +1392,12 @@ class PlottingEngine:
     @staticmethod
     def _smooth_curve(T_raw, P_raw, Tc, Pc, n=1000, gap_tol=0.01):
         """
-        Fit a shape-preserving PCHIP spline to raw curve data.
+        PCHIP spline through bubble/dew data, anchored at the critical point.
 
-        Appends (Tc, Pc) as a hard anchor only when there is a meaningful
-        gap between the last computed point and the critical point
-        (> gap_tol * Tc K).
+        Uses arc-length parameterisation so that the near-vertical tangent
+        near Tc (where dP/dT → ∞) does not cause overshoots or kinks.
+        T(s) and P(s) are each fitted independently as functions of the
+        normalised arc length s ∈ [0, 1].
         """
         T = np.asarray(T_raw, dtype=float)
         P = np.asarray(P_raw, dtype=float)
@@ -1190,8 +1406,14 @@ class PlottingEngine:
         if (Tc - T[-1]) > gap_tol * Tc:
             T = np.append(T, Tc)
             P = np.append(P, Pc)
-        T_s = np.linspace(T.min(), T.max(), n)
-        return T_s, PchipInterpolator(T, P)(T_s)
+        # Arc-length parameterisation
+        seg = np.hypot(np.diff(T), np.diff(P))
+        s = np.concatenate([[0.0], np.cumsum(seg)])
+        s /= s[-1]                              # normalise to [0, 1]
+        s_fine = np.linspace(0.0, 1.0, n)
+        T_s = PchipInterpolator(s, T)(s_fine)
+        P_s = PchipInterpolator(s, P)(s_fine)
+        return T_s, P_s
 
     @staticmethod
     def plot_phase_diagram(PT_results, feed_key, parameters):
@@ -1606,9 +1828,11 @@ def VLE_DFT_summary(VLE_DFT):
     """Backward compatibility wrapper."""
     return DataProcessor.summarize_vle_dft(VLE_DFT)
 
-def VLE_DFT_to_csv(VLE_DFT, folder="CSV", verbose=False):
+def VLE_DFT_to_csv(VLE_DFT, folder="CSV", verbose=False,
+                   filename_interfacial=None, filename_envelope=None):
     """Backward compatibility wrapper."""
-    return DataProcessor.export_to_csv(VLE_DFT, folder, verbose)
+    return DataProcessor.export_to_csv(VLE_DFT, folder, verbose,
+                                       filename_interfacial, filename_envelope)
 
 # Plotting
 def plot_PT(PT_results, feed_key, parameters):

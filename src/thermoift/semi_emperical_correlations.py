@@ -38,6 +38,7 @@ semi_emperical_correlations
 """
 
 import os
+import json
 import feos
 import numpy as np
 import pandas as pd
@@ -45,7 +46,7 @@ import warnings
 import si_units as si
 import matplotlib.pyplot as plt
 
-from scipy.interpolate import griddata
+from scipy.interpolate import griddata, PchipInterpolator
 from scipy.ndimage import binary_erosion
 from matplotlib.path import Path as MplPath
 from .FeosPlugin import PARAMETERS, molar_density_mol_m3, components, latex_formula
@@ -225,6 +226,11 @@ class semi_emperical_correlations:
         rhoV0   = self._density_fn(vle.vapor.density) * 1e-6
         Psat    = float(vle.liquid.pressure() / si.BAR)
 
+        # Guard against silent EOS failures (e.g. P ~ 1e-237 bar): positive and
+        # finite but physically impossible for any real component below Tc.
+        if not (np.isfinite(Psat) and Psat > 1e-6):
+            return np.nan, np.nan, np.nan, Tc_K, Pc_bar, np.nan
+
         try:
             interface   = feos.PlanarInterface.from_tanh(
                 vle     =vle,
@@ -361,7 +367,13 @@ class semi_emperical_correlations:
                 vle = feos.PhaseEquilibrium.pure(eos, T_K * si.KELVIN)
                 rhoL0_arr[i] = self._density_fn(vle.liquid.density) * 1e-6
                 rhoV0_arr[i] = self._density_fn(vle.vapor.density) * 1e-6
-                Psat_arr[i] = float(vle.liquid.pressure() / si.BAR)
+                Psat_arr[i]  = float(vle.liquid.pressure() / si.BAR)
+                # Guard against silent EOS failures (e.g. P ~ 1e-237 bar).
+                if not (np.isfinite(Psat_arr[i]) and Psat_arr[i] > 1e-6):
+                    rhoL0_arr[i] = np.nan
+                    rhoV0_arr[i] = np.nan
+                    Psat_arr[i]  = np.nan
+                    continue
             except Exception:
                 continue
 
@@ -1711,6 +1723,9 @@ class semi_emperical_correlations:
         T_ref_fixed: float | None = None,
         data_cdft: dict | None = None,
         data_wsd_nocorr: dict | None = None,
+        filename_parachor: str = "PT_parachor",
+        filename_parachor_fixed: str = "PT_parachor_fixed",
+        filename_wsd: str = "PT_wsd",
     ) -> dict[str, pd.DataFrame]:
         """
         Save PT colormap IFT DataFrames to CSV files, one per method.
@@ -1905,7 +1920,6 @@ class semi_emperical_correlations:
             ordered += [col for col in pure_prop_cols if col in df.columns]
             if include_parachor:
                 ordered += [f"parachor_{c}" for c in output_components]
-                ordered += ["n_exp"]
             ordered += [gamma_col_rename]
             ordered  = [c for c in ordered if c in df.columns]
             return df[ordered]
@@ -1918,12 +1932,6 @@ class semi_emperical_correlations:
         if ML_mode:
             df_para = _pad_and_reorder(df_raw_para, include_parachor=True,
                                        gamma_col_rename="gamma_parachor")
-            df_para["n_exp"] = n_exp
-            # Ensure n_exp is placed before gamma (reorder respected)
-            gamma_col = "gamma_parachor"
-            if "n_exp" in df_para.columns and gamma_col in df_para.columns:
-                cols = [c for c in df_para.columns if c not in ("n_exp", gamma_col)]
-                df_para = df_para[cols + ["n_exp", gamma_col]]
         else:
             df_para = df_raw_para[["T", "P", "gamma_mix"]].rename(
                 columns={"gamma_mix": "gamma_parachor"})
@@ -1937,7 +1945,7 @@ class semi_emperical_correlations:
             df_para.drop(columns=["gamma_cDFT"], inplace=True)
 
         df_para = df_para.sort_values("T").reset_index(drop=True)
-        path = os.path.join(output_dir, "PT_parachor.csv")
+        path = os.path.join(output_dir, f"{filename_parachor}.csv")
         df_para.to_csv(path, index=False)
         result["PT_parachor"] = df_para
         print(f"Saved {path} ({len(df_para)} rows, {len(df_para.columns)} cols)")
@@ -1961,7 +1969,7 @@ class semi_emperical_correlations:
                     columns={"gamma_mix": "gamma_parachor_fixed"})
 
             df_fixed = df_fixed.sort_values("T").reset_index(drop=True)
-            path = os.path.join(output_dir, "PT_parachor_fixed.csv")
+            path = os.path.join(output_dir, f"{filename_parachor_fixed}.csv")
             df_fixed.to_csv(path, index=False)
             result["PT_parachor_fixed"] = df_fixed
             suffix = f" (T_ref={T_ref_fixed} K)" if T_ref_fixed is not None else ""
@@ -1979,32 +1987,59 @@ class semi_emperical_correlations:
             df_wsd = df_raw_wsd[["T", "P", "gamma_mix"]].rename(
                 columns={"gamma_mix": "gamma_wsd"})
 
-        # Append cDFT - WSD difference columns (direct merge, same grid)
-        if _cdft_df is not None:
-            df_wsd["T"] = np.round(df_wsd["T"].values, 10)
-            df_wsd["P"] = np.round(df_wsd["P"].values, 10)
-            df_wsd = df_wsd.merge(_cdft_df, on=["T", "P"], how="left")
-            df_wsd["gamma_cDFT_minus_wsd_corrected"] = df_wsd["gamma_cDFT"] - df_wsd["gamma_wsd"]
-            df_wsd.drop(columns=["gamma_cDFT"], inplace=True)
+        df_wsd["T"] = np.round(df_wsd["T"].values, 10)
+        df_wsd["P"] = np.round(df_wsd["P"].values, 10)
 
-        if _cdft_df is not None and data_wsd_nocorr is not None:
+        # Append uncorrected WSD column (always, when data_wsd_nocorr is provided)
+        if data_wsd_nocorr is not None:
             df_nc = pd.DataFrame({
                 "T": np.round(np.asarray(data_wsd_nocorr["T"]), 10),
                 "P": np.round(np.asarray(data_wsd_nocorr["P"]), 10),
-                "gamma_wsd_nocorr": np.asarray(data_wsd_nocorr["gamma"]),
+                "gamma_wsd_UC": np.asarray(data_wsd_nocorr["gamma"]),
             })
             df_wsd = df_wsd.merge(df_nc, on=["T", "P"], how="left")
+
+        # Append cDFT difference columns (direct merge, same grid)
+        if _cdft_df is not None:
             df_wsd = df_wsd.merge(_cdft_df, on=["T", "P"], how="left")
-            df_wsd["gamma_cDFT_minus_wsd_uncorrected"] = df_wsd["gamma_cDFT"] - df_wsd["gamma_wsd_nocorr"]
-            df_wsd.drop(columns=["gamma_cDFT", "gamma_wsd_nocorr"], inplace=True)
+            df_wsd["gamma_cDFT_minus_wsd_corrected"] = df_wsd["gamma_cDFT"] - df_wsd["gamma_wsd"]
+            if "gamma_wsd_UC" in df_wsd.columns:
+                df_wsd["gamma_cDFT_minus_wsd_uncorrected"] = df_wsd["gamma_cDFT"] - df_wsd["gamma_wsd_UC"]
+            df_wsd.drop(columns=["gamma_cDFT"], inplace=True)
 
         df_wsd = df_wsd.sort_values("T").reset_index(drop=True)
-        path = os.path.join(output_dir, "PT_wsd.csv")
+        path = os.path.join(output_dir, f"{filename_wsd}.csv")
         df_wsd.to_csv(path, index=False)
         result["PT_wsd"] = df_wsd
         print(f"Saved {path} ({len(df_wsd)} rows, {len(df_wsd.columns)} cols)")
 
         return result
+
+    @staticmethod
+    def _smooth_curve(T_raw, P_raw, Tc, Pc, n=1000, gap_tol=0.01):
+        """
+        PCHIP spline through bubble/dew data, anchored at the critical point.
+
+        Uses arc-length parameterisation so that the near-vertical tangent
+        near Tc (where dP/dT → ∞) does not cause overshoots or kinks.
+        T(s) and P(s) are each fitted independently as functions of the
+        normalised arc length s ∈ [0, 1].
+        """
+        T = np.asarray(T_raw, dtype=float)
+        P = np.asarray(P_raw, dtype=float)
+        idx = np.argsort(T)
+        T, P = T[idx], P[idx]
+        if (Tc - T[-1]) > gap_tol * Tc:
+            T = np.append(T, Tc)
+            P = np.append(P, Pc)
+        # Arc-length parameterisation
+        seg = np.hypot(np.diff(T), np.diff(P))
+        s = np.concatenate([[0.0], np.cumsum(seg)])
+        s /= s[-1]                              # normalise to [0, 1]
+        s_fine = np.linspace(0.0, 1.0, n)
+        T_s = PchipInterpolator(s, T)(s_fine)
+        P_s = PchipInterpolator(s, P)(s_fine)
+        return T_s, P_s
 
     @staticmethod
     def plot_PT_colormap(
@@ -2020,6 +2055,8 @@ class semi_emperical_correlations:
         title_suffix: str = "",
         grid_size: int = 200,
         isoline_step: int = 2,
+        filename: str | None = None,
+        folder: str = "CSV",
     ) -> tuple[plt.Figure, plt.Axes]:
         """
         Plot a filled-contour PT colormap of mixture IFT inside the two-phase
@@ -2088,8 +2125,10 @@ class semi_emperical_correlations:
             fill_value=np.nan,
         )
 
-        env_T = list(T_bub) + list(reversed(T_dew))
-        env_P = list(P_bub) + list(reversed(P_dew))
+        T_bub_s, P_bub_s = semi_emperical_correlations._smooth_curve(T_bub, P_bub, Tc_K, Pc_bar)
+        T_dew_s, P_dew_s = semi_emperical_correlations._smooth_curve(T_dew, P_dew, Tc_K, Pc_bar)
+        env_T = list(T_bub_s) + list(reversed(list(T_dew_s)))
+        env_P = list(P_bub_s) + list(reversed(list(P_dew_s)))
         path = MplPath(np.column_stack([env_T, env_P]))
         pts = np.column_stack([T_mesh.ravel(), P_mesh.ravel()])
         inside = path.contains_points(pts).reshape(T_mesh.shape)
@@ -2147,26 +2186,19 @@ class semi_emperical_correlations:
         cbar.ax.tick_params(labelsize=10)
 
         ax.plot(
-            T_bub,
-            P_bub,
+            T_bub_s,
+            P_bub_s,
             "b-",
             linewidth=ps.linewidth,
             label="Bubble curve",
             zorder=10,
         )
         ax.plot(
-            T_dew,
-            P_dew,
+            T_dew_s,
+            P_dew_s,
             "r-",
             linewidth=ps.linewidth,
             label="Dew curve",
-            zorder=10,
-        )
-        ax.plot(
-            [T_dew[-1], Tc_K],
-            [P_dew[-1], Pc_bar],
-            "r-",
-            linewidth=ps.linewidth,
             zorder=10,
         )
 
@@ -2196,6 +2228,14 @@ class semi_emperical_correlations:
 
         ps.style_legend(ax, fontsize=ps.legend_fontsize, loc="best", framealpha=0)
         plt.tight_layout()
+
+        if filename is not None:
+            png_dir = os.path.join(folder, "PNG")
+            pdf_dir = os.path.join(folder, "PDF")
+            os.makedirs(png_dir, exist_ok=True)
+            os.makedirs(pdf_dir, exist_ok=True)
+            fig.savefig(os.path.join(png_dir, f"{filename}.png"), dpi=300, bbox_inches="tight")
+            fig.savefig(os.path.join(pdf_dir, f"{filename}.pdf"), bbox_inches="tight")
 
         return fig, ax
 
@@ -2280,6 +2320,8 @@ class ColormapDifference:
         P_dew=None,
         label: str = "",
         isoline_step: int = 1,
+        filename: str | None = None,
+        folder: str = "CSV",
     ) -> tuple[plt.Figure, plt.Axes] | tuple[None, None]:
         """
         Plot the difference colormap with iso-difference lines and
@@ -2348,10 +2390,14 @@ class ColormapDifference:
         cbar.ax.tick_params(labelsize=10)
 
         if T_bub is not None:
-            ax.plot(T_bub, P_bub, "b-", linewidth=ps.linewidth,
+            T_bub_s, P_bub_s = semi_emperical_correlations._smooth_curve(
+                T_bub, P_bub, Tc_K, Pc_bar)
+            ax.plot(T_bub_s, P_bub_s, "b-", linewidth=ps.linewidth,
                     label="Bubble curve", zorder=10)
         if T_dew is not None:
-            ax.plot(T_dew, P_dew, "r-", linewidth=ps.linewidth,
+            T_dew_s, P_dew_s = semi_emperical_correlations._smooth_curve(
+                T_dew, P_dew, Tc_K, Pc_bar)
+            ax.plot(T_dew_s, P_dew_s, "r-", linewidth=ps.linewidth,
                     label="Dew curve", zorder=10)
 
         ax.plot(Tc_K, Pc_bar, "o", markersize=4, zorder=15,
@@ -2368,4 +2414,78 @@ class ColormapDifference:
             ax.set_title(f"IFT Difference: {label}", fontsize=ps.label_fontsize)
 
         fig.tight_layout()
+
+        if filename is not None:
+            png_dir = os.path.join(folder, "PNG")
+            pdf_dir = os.path.join(folder, "PDF")
+            os.makedirs(png_dir, exist_ok=True)
+            os.makedirs(pdf_dir, exist_ok=True)
+            fig.savefig(os.path.join(png_dir, f"{filename}.png"), dpi=300, bbox_inches="tight")
+            fig.savefig(os.path.join(pdf_dir, f"{filename}.pdf"), bbox_inches="tight")
+
         return fig, ax
+
+    def deviation_summary(
+        self,
+        label: str = "",
+        filename: str | None = None,
+        folder: str = "CSV",
+    ) -> dict:
+        """
+        Compute max/min deviation statistics from the masked difference grid
+        and optionally write them to a JSON file.
+
+        The sign convention follows the class:  ``diff = data_A - data_B``
+        (typically ``cDFT - SEC``).
+
+        * **max_deviation**  — largest positive value  (data_A over-predicts data_B)
+        * **min_deviation**  — largest negative value  (data_A under-predicts data_B)
+
+        Parameters
+        ----------
+        label : str, optional
+            Human-readable label stored in the JSON (e.g. ``"cDFT - Parachor"``).
+        filename : str, optional
+            Base filename (without extension) for the JSON output.
+            If *None* the data are returned but not written to disk.
+        folder : str, optional
+            Root output folder; the JSON is placed directly in this folder.
+
+        Returns
+        -------
+        dict
+            ``{label, max_deviation_mNm, max_deviation_T_K, max_deviation_P_bar,
+                min_deviation_mNm, min_deviation_T_K, min_deviation_P_bar,
+                mean_deviation_mNm, rmse_mNm, n_points}``
+        """
+        if self.diff_masked.count() == 0:
+            return {}
+
+        flat = self.diff_masked.compressed()
+        idx_flat_max = int(np.argmax(flat))
+        idx_flat_min = int(np.argmin(flat))
+
+        # Map back to 2-D indices to retrieve T and P at the extrema
+        valid_idx = np.argwhere(~np.ma.getmaskarray(self.diff_masked))
+        row_max, col_max = valid_idx[idx_flat_max]
+        row_min, col_min = valid_idx[idx_flat_min]
+
+        summary = {
+            "label": label,
+            "max_deviation_mNm": float(flat[idx_flat_max]),
+            "max_deviation_T_K": float(self.T_mesh[row_max, col_max]),
+            "max_deviation_P_bar": float(self.P_mesh[row_max, col_max]),
+            "min_deviation_mNm": float(flat[idx_flat_min]),
+            "min_deviation_T_K": float(self.T_mesh[row_min, col_min]),
+            "min_deviation_P_bar": float(self.P_mesh[row_min, col_min]),
+            "mean_deviation_mNm": float(np.mean(flat)),
+            "rmse_mNm": float(np.sqrt(np.mean(flat ** 2))),
+        }
+
+        if filename is not None:
+            os.makedirs(folder, exist_ok=True)
+            json_path = os.path.join(folder, f"{filename}.json")
+            with open(json_path, "w") as f:
+                json.dump(summary, f, indent=4)
+
+        return summary
