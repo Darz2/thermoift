@@ -45,7 +45,25 @@ _HERE = Path(__file__).parent
 class RegistryManager:
     """
     Central management of component registry and KIJ labels.
-    Uses class attributes for lazy-loaded, shared state.
+
+    Loads PC-SAFT parameters from ``parameters.json`` once and stores them as
+    shared class attributes.  All other classes in this module call
+    ``RegistryManager._ensure_loaded()`` before accessing the registry, so the
+    JSON file is read at most once per interpreter session.
+
+    Class attributes
+    ----------------
+    _registry : dict[str, feos.PureRecord] or None
+        Maps component name → PureRecord.  ``None`` until first load.
+    _kij_labels : dict[str, str] or None
+        Maps component name → KIJ label string used in KIJ.json files.
+
+    Notes
+    -----
+    Registry is **not** auto-loaded at import time.  Call
+    ``RegistryManager.load_registry(json_path=...)`` explicitly before using
+    the rest of the plugin, or rely on ``_ensure_loaded()`` to trigger a lazy
+    load from the default ``parameters.json`` path.
     """
     _registry = None
     _kij_labels = None
@@ -275,7 +293,18 @@ class RegistryManager:
 ############# CLASS 2: CompositionHandler #############
 
 class CompositionHandler:
-    """Feed generation, normalization, and composition utilities."""
+    """
+    Feed generation, normalization, and composition utilities.
+
+    All methods are static — no instantiation required.  Typical usage:
+
+    * ``generate_feeds`` / ``make_feeds`` / ``load_compositions`` — build a
+      2-D feeds array ready for iteration in the main VLE/cDFT loop.
+    * ``normalize_z`` / ``compute_feed_moles`` — per-composition helpers called
+      inside the loop.
+    * ``reduce_components`` — drop zero-fraction species to keep the EOS
+      objects as small as possible.
+    """
 
     @staticmethod
     def generate_feeds(CO2, n_points):
@@ -471,10 +500,51 @@ class CompositionHandler:
             print(f"{i:3d} | {row_str}")
 
 
+    @staticmethod
+    def active_components_from_feeds(feeds, components, kij_map):
+        """
+        Detect which components are active (non-zero in at least one feed)
+        and return the reduced component list, KIJ labels, and KIJ map.
+
+        Parameters
+        ----------
+        feeds : list of array-like
+            Feed composition vectors (mole fractions).
+        components : list of str
+            Full component name list matching the composition vector length.
+        kij_map : dict
+            Full KIJ map keyed by ``(label_i, label_j)`` tuples.
+
+        Returns
+        -------
+        active_components : list of str
+        active_kij_labels : list of str
+        active_map : dict
+        """
+        import numpy as np
+        all_z         = np.array(feeds)
+        active_mask   = np.any(all_z > 0, axis=0)
+        active_components = [c for c, m in zip(components, active_mask) if m]
+        active_kij_labels = RegistryManager.kij_labels_from_names(active_components)
+        active_map        = ParameterBuilder.reduce_kij_map(active_components, kij_map)
+        return active_components, active_kij_labels, active_map
+
+
 ############# CLASS 3: ParameterBuilder #############
 
 class ParameterBuilder:
-    """Build feos Parameters objects with T-dependent kij support."""
+    """
+    Build ``feos.Parameters`` objects with optional T-dependent kij support.
+
+    Wraps ``RegistryManager`` lookups and ``KIJMatrixBuilder`` polynomial
+    evaluation into a single call.  Two usage patterns:
+
+    * **Fixed kij** — pass ``component_names`` only; binary records are
+      omitted and feos defaults to kij = 0 for all pairs.
+    * **T-dependent kij** — pass ``component_names``, ``T_K``,
+      ``kij_builder`` (a ``KIJMatrixBuilder``), and optionally ``model_map``
+      to select the polynomial model per pair.
+    """
 
     @staticmethod
     def build_parameters(
@@ -546,6 +616,34 @@ class ParameterBuilder:
         return feos.Parameters.from_records(records, binary_records=binary_records)
 
     @staticmethod
+    @staticmethod
+    def build_kij_map(kij_labels, kij_overrides):
+        """
+        Build a KIJ map from all pairwise combinations of *kij_labels*.
+
+        Parameters
+        ----------
+        kij_labels : list of str
+            KIJ label strings for each component.
+        kij_overrides : dict
+            JSON-loaded dict mapping ``"A-B"`` or ``"B-A"`` string keys to
+            model names.  Missing pairs fall back to ``"zero"``.
+
+        Returns
+        -------
+        kij_map : dict
+            Keys are ``(label_i, label_j)`` tuples; values are model-name
+            strings.
+        """
+        from itertools import combinations
+        kij_map = {}
+        for pair in combinations(kij_labels, 2):
+            pair_key = f"{pair[0]}-{pair[1]}"
+            alt_key  = f"{pair[1]}-{pair[0]}"
+            kij_map[pair] = kij_overrides.get(pair_key, kij_overrides.get(alt_key, "zero"))
+        return kij_map
+
+    @staticmethod
     def reduce_kij_map(active_components, kij_map):
         """
         Filter kij_map to only include pairs of active components.
@@ -583,7 +681,14 @@ class ParameterBuilder:
 ############# CLASS 4: PropertyCalculator #############
 
 class PropertyCalculator:
-    """Density conversions and unit handling."""
+    """
+    Density conversions and unit handling for feos quantity objects.
+
+    Provides thin wrappers around ``si_units`` arithmetic that handle the
+    different unit representations that feos may return (``mol/m³``,
+    ``kmol/m³``) and converts to the standard units used throughout the
+    pipeline (mol/m³, mol/cm³, kg/m³).
+    """
 
     @staticmethod
     def value_in(q, unit):
@@ -609,9 +714,26 @@ class PropertyCalculator:
     @staticmethod
     def molar_density_mol_m3(rho):
         """
-        Convert molar density to mol/m^3.
+        Convert a feos molar-density quantity to mol/m³.
 
-        Handles multiple unit formats and raises TypeError if unable.
+        Tries ``si.MOL / si.METER**3`` first, then ``si.KMOL / si.METER**3``
+        (multiplied by 1000), to handle the different unit representations that
+        feos may return depending on version.
+
+        Parameters
+        ----------
+        rho : quantity or float
+            Molar density from a feos State object (e.g. ``state.density``).
+
+        Returns
+        -------
+        float
+            Molar density in mol/m³.
+
+        Raises
+        ------
+        TypeError
+            If the density units cannot be interpreted.
         """
         mol_per_m3 = si.MOL / (si.METER**3)
         try:
@@ -684,7 +806,21 @@ class PropertyCalculator:
 ############# CLASS 5: VLECalculator #############
 
 class VLECalculator:
-    """Vapor-liquid equilibrium calculations."""
+    """
+    Vapor-liquid equilibrium calculations via the feos framework.
+
+    Covers the full phase-envelope workflow:
+
+    1. **Critical point** — ``compute_critical_point``
+    2. **Temperature grid** — ``make_T_grid`` (dense near Tc)
+    3. **EOS factory** — ``make_eos_factory`` for T-dependent kij
+    4. **Bubble / dew curves** — ``compute_bubble_curve``,
+       ``compute_dew_curve`` (both support warm-start continuation)
+    5. **Cleaning** — ``_clean_envelope_curve`` removes non-physical and
+       trivial-solution artefacts
+    6. **Envelope** — ``compute_phase_envelope`` runs steps 4–5 jointly
+    7. **TP flash** — ``tp_flash`` for single-point two-phase split
+    """
 
     @staticmethod
     def _clean_envelope_curve(T_arr, P_arr, T_other=None, P_other=None,
@@ -1049,7 +1185,17 @@ class VLECalculator:
 ############# CLASS 6: InterfacialTensionCalculator #############
 
 class InterfacialTensionCalculator:
-    """cDFT planar interface and interfacial tension calculations."""
+    """
+    cDFT planar-interface computations via the feos framework.
+
+    Wraps ``feos.PlanarInterface`` construction and solving into two steps:
+
+    1. ``build_planar_interface`` — initialise the interface with a tanh
+       density profile from a converged VLE equilibrium object.
+    2. ``solve_interface_properties`` — run the DFT minimisation and extract
+       surface tension [mN/m], interfacial thickness (10–90 criterion) [nm],
+       and per-component interfacial enrichment.
+    """
 
     @staticmethod
     def build_planar_interface(eq, critical_temperature, n_grid, l_grid):
@@ -1113,7 +1259,56 @@ class InterfacialTensionCalculator:
 ############# CLASS 7: DataProcessor #############
 
 class DataProcessor:
-    """Results aggregation, formatting, and export."""
+    """
+    Results aggregation, formatting, and CSV export.
+
+    Converts raw per-state-point dictionaries from the VLE/cDFT loop into
+    a standardised ``VLE_DFT`` nested dict, then serialises it to CSV.
+
+    ``VLE_DFT`` structure
+    ---------------------
+    ::
+
+        {
+            "feed_1": {
+                "z": [...],                          # feed mole fractions
+                "phase_envelope": {
+                    "bubble_curve": [{"T_K": ..., "P_bar": ...}, ...],
+                    "dew_curve":    [{"T_K": ..., "P_bar": ...}, ...],
+                    "isothermal_lines": [{"T_K": ..., "P_bubble_bar": ...,
+                                         "P_dew_bar": ...}, ...],
+                },
+                "interfacial_data": {
+                    280: [{"temperature": 280, "pressure": ...,
+                           "gamma": ..., ...}, ...],
+                    ...
+                },
+            },
+            ...
+        }
+
+    ``export_to_csv`` writes into two sub-folders of the output root:
+    ``interfacial_results/`` and ``phase_envelope/``.
+    """
+
+    @staticmethod
+    def extract_common_envelope(feed: dict):
+        """Return (common_T, P_bub_at, P_dew_at) arrays over the overlapping
+        temperature range of the bubble and dew curves stored in *feed*."""
+        bub_pts   = sorted(feed.get("bubble", []), key=lambda p: p["T_K"])
+        dew_pts   = sorted(feed.get("dew",    []), key=lambda p: p["T_K"])
+        T_bub_arr = np.array([p["T_K"]   for p in bub_pts])
+        P_bub_arr = np.array([p["P_bar"] for p in bub_pts])
+        T_dew_arr = np.array([p["T_K"]   for p in dew_pts])
+        P_dew_arr = np.array([p["P_bar"] for p in dew_pts])
+
+        T_lo     = max(T_bub_arr.min(), T_dew_arr.min())
+        T_hi     = min(T_bub_arr.max(), T_dew_arr.max()) * 0.999
+        mask     = (T_bub_arr >= T_lo) & (T_bub_arr <= T_hi)
+        common_T = T_bub_arr[mask]
+        P_bub_at = P_bub_arr[mask]
+        P_dew_at = np.interp(common_T, T_dew_arr, P_dew_arr)
+        return common_T, P_bub_at, P_dew_at
 
     @staticmethod
     def assemble_row(
@@ -1333,8 +1528,8 @@ class DataProcessor:
             Mapping of feed keys to saved file paths
         """
         try:
-            interfacial_folder = os.path.join(folder, "interfacial_results")
-            envelope_folder = os.path.join(folder, "phase_envelope")
+            interfacial_folder = os.path.join(folder, "InterfacialProperties")
+            envelope_folder = os.path.join(folder, "PhaseEnvelope")
 
             os.makedirs(interfacial_folder, exist_ok=True)
             os.makedirs(envelope_folder, exist_ok=True)
@@ -1387,7 +1582,25 @@ class DataProcessor:
 ############# CLASS 8: PlottingEngine #############
 
 class PlottingEngine:
-    """Visualization and plot generation."""
+    """
+    Visualization and plot generation for VLE and interfacial-tension results.
+
+    All methods are static and return ``matplotlib`` figure objects so callers
+    can further customise or display them with ``IPython.display.display(fig)``.
+
+    Available plots
+    ---------------
+    * ``plot_phase_diagram`` — PT bubble + dew curves with critical point
+    * ``plot_interfacial_tension_map`` — filled-contour gamma map in PT space
+    * ``save_figure`` — single-file save at specified DPI
+    * ``save_plots`` — saves PNG to ``<folder>/PNG/`` and PDF to
+      ``<folder>/PDF/`` in one call
+
+    Internal helpers
+    ----------------
+    * ``_smooth_curve`` — PCHIP spline through raw bubble/dew data anchored
+      at the critical point, using arc-length parameterisation
+    """
 
     @staticmethod
     def _smooth_curve(T_raw, P_raw, Tc, Pc, n=1000, gap_tol=0.01):
@@ -1398,6 +1611,29 @@ class PlottingEngine:
         near Tc (where dP/dT → ∞) does not cause overshoots or kinks.
         T(s) and P(s) are each fitted independently as functions of the
         normalised arc length s ∈ [0, 1].
+
+        Parameters
+        ----------
+        T_raw : array-like
+            Raw temperature values [K] from the computed curve.
+        P_raw : array-like
+            Raw pressure values [bar] corresponding to ``T_raw``.
+        Tc : float
+            Critical temperature [K] used as the spline anchor.
+        Pc : float
+            Critical pressure [bar] used as the spline anchor.
+        n : int, optional
+            Number of points in the output smooth curve (default 1000).
+        gap_tol : float, optional
+            If the last raw point is more than ``gap_tol * Tc`` below Tc, the
+            critical point is appended to close the gap (default 0.01).
+
+        Returns
+        -------
+        T_s : np.ndarray
+            Smoothed temperature values, shape (n,).
+        P_s : np.ndarray
+            Smoothed pressure values, shape (n,).
         """
         T = np.asarray(T_raw, dtype=float)
         P = np.asarray(P_raw, dtype=float)
@@ -1640,16 +1876,28 @@ class PlottingEngine:
     @staticmethod
     def save_plots(fig, filename_base, folder="PLOTS"):
         """
-        Save a figure as both PNG and PDF in separate folders.
+        Save a figure as both PNG and PDF in separate sub-folders.
+
+        Creates ``<folder>/PNG/<filename_base>.png`` and
+        ``<folder>/PDF/<filename_base>.pdf``.  Both sub-folders are created
+        automatically if they do not exist.  Errors are caught and printed as
+        warnings rather than raised, so a missing output directory does not
+        abort the main computation loop.
 
         Parameters
         ----------
         fig : matplotlib.figure.Figure
-            Figure to save
+            Figure to save.
         filename_base : str
-            Base filename without extension
-        folder : str
-            Output root folder
+            Base filename without extension (e.g. ``"PT_feed_1"``).
+        folder : str, optional
+            Output root folder (default ``"PLOTS"``).
+
+        Notes
+        -----
+        This method does **not** close or display the figure.  Call
+        ``IPython.display.display(fig)`` afterwards if you need the figure to
+        appear in a Jupyter cell output.
         """
         try:
             png_folder = os.path.join(folder, "PNG")
@@ -1672,7 +1920,13 @@ class PlottingEngine:
 ############# CLASS 9: UtilityFunctions #############
 
 class UtilityFunctions:
-    """Formatting and miscellaneous utilities."""
+    """
+    Formatting and miscellaneous utilities.
+
+    Provides LaTeX chemical-formula conversion and a thin wrapper around
+    ``rng_utils.get_rng`` so callers that already import this module do not
+    need a separate import for reproducible random-number generation.
+    """
 
     @staticmethod
     def latex_formula(formula: str) -> str:
@@ -1775,6 +2029,18 @@ def PARAMETERS(component_names, T_K=None, kij_builder=None, model_map=None):
 def reduce_kij_map(active_components, kij_map):
     """Backward compatibility wrapper."""
     return ParameterBuilder.reduce_kij_map(active_components, kij_map)
+
+def build_kij_map(kij_labels, kij_overrides):
+    """Backward compatibility wrapper."""
+    return ParameterBuilder.build_kij_map(kij_labels, kij_overrides)
+
+def active_components_from_feeds(feeds, components, kij_map):
+    """Backward compatibility wrapper."""
+    return CompositionHandler.active_components_from_feeds(feeds, components, kij_map)
+
+def extract_common_envelope(feed):
+    """Backward compatibility wrapper."""
+    return DataProcessor.extract_common_envelope(feed)
 
 # Unit conversions
 def value_in(q, unit):

@@ -60,15 +60,45 @@ feeds = builder.generate()
 ### 2. Data Collection (`FeosPlugin.py`)
 
 Run PC-SAFT/cDFT calculations to compute interfacial properties.
+The module is class-based — use the individual static-method classes directly.
 
 ```python
-from thermoift import FeosPlugin
+from thermoift.FeosPlugin import (
+    RegistryManager, CompositionHandler, ParameterBuilder,
+    VLECalculator, InterfacialTensionCalculator, DataProcessor, PlottingEngine,
+)
+import si_units as si
+import feos
 
-# Initialize with mixture
-plugin = FeosPlugin(components=["carbon dioxide", "methane"])
+# 1. Load component registry (once per session)
+RegistryManager.load_registry("path/to/parameters.json")
 
-# Compute VLE and interfacial tension
-results = plugin.compute_interfacial_properties(T=250, P=50, z=[0.9, 0.1])
+# 2. Build feed compositions
+feeds = CompositionHandler.make_feeds([0.95, 0.03, 0.02])   # e.g. CO2/H2/Ar
+
+# 3. Build PC-SAFT parameters
+components = ["carbon dioxide", "hydrogen", "argon"]
+params = ParameterBuilder.build_parameters(components, T_K=250.0)
+eos = feos.HelmholtzEnergyFunctional.pcsaft(params)
+
+# 4. Compute critical point and phase envelope
+z = CompositionHandler.normalize_z(feeds[0])
+feed_mol = CompositionHandler.compute_feed_moles(z)
+Tc, Pc = VLECalculator.compute_critical_point(eos, feed_mol, T_guess=300.0)
+T_vals = VLECalculator.make_T_grid(T_min=220.0, Tc_K=float(Tc / si.KELVIN), N_T=80)
+T_bub, P_bub, T_dew, P_dew = VLECalculator.compute_phase_envelope(
+    eos, T_vals, feed_mol, verbose=False, Tc=float(Tc / si.KELVIN)
+)
+
+# 5. TP flash + cDFT at a single state point
+eq, x, y, rho_L, rho_V = VLECalculator.tp_flash(
+    eos, T=250 * si.KELVIN, P=60 * si.BAR, feed=feed_mol,
+    molar_masses=[44.01, 2.016, 39.948],
+)
+interface = InterfacialTensionCalculator.build_planar_interface(
+    eq, critical_temperature=Tc, n_grid=1024, l_grid=100.0
+)
+gamma_mN_m, thickness_nm, enrichment = InterfacialTensionCalculator.solve_interface_properties(interface)
 ```
 
 ### 3. ML Preprocessing (`ML_preprocessing.py`)
@@ -99,22 +129,11 @@ prep.plot_target_vs_vapor_density(save_path="gamma_vs_rhoV")
 prep.plot_target_phase_envelope(save_path="gamma_phase_envelope")
 ```
 
-### 4. ML Training *(TODO)*
+### 4. ML Training *(not yet included)*
 
-*Future module for model training and hyperparameter optimization.*
-
-```python
-# Planned API
-from thermoift import MLTrainer
-
-trainer = MLTrainer(
-    model_type="random_forest",
-    X_train=X_train,
-    y_train=y_train,
-)
-trainer.fit()
-trainer.save("model.pkl")
-```
+Model training is intentionally left to the user's preferred framework
+(scikit-learn, PyTorch, XGBoost, etc.).  See the **Quick Start** section
+below for a minimal sklearn example using ``MLPreprocessing`` output data.
 
 ### 5. ML Postprocessing (`ML_postprocessing.py`)
 
@@ -198,30 +217,49 @@ ps.save_plot(fig, "my_figure")
 
 ### Random Utilities (`rng_utils.py`)
 
-Reproducible random number generation.
+Reproducible random number generation with selectable bit generators.
 
 ```python
-from thermoift import rng_utils
+from thermoift.rng_utils import get_rng, describe_rngs
 
-# Set global seed
-rng_utils.set_seed(42)
+# Default PCG64 generator (recommended)
+rng = get_rng(seed=42)
 
-# Get random generator
-rng = rng_utils.get_rng()
+# Select a different bit generator
+rng = get_rng(seed=42, rng_type="MT19937")   # classic Mersenne Twister
+
+# List all available generators
+describe_rngs()
 ```
+
+**Available `rng_type` options:** ``"PCG64"`` (default), ``"MT19937"``,
+``"SFC64"``, ``"Philox"``.
 
 ### Semi-Empirical Correlations (`semi_emperical_correlations.py`)
 
-Classical IFT correlations for comparison.
+Classical IFT correlations (Parachor, WSD, Redlich-Kister) benchmarked
+against full cDFT results.
 
 ```python
-from thermoift import semi_emperical_correlations as sec
+from thermoift.semi_emperical_correlations import semi_emperical_correlations
 
-# Parachor method
-gamma = sec.parachor_ift(parachor, rho_L, rho_V, M)
+sec = semi_emperical_correlations(n_grid=1024, l_grid=100.0)
 
-# Macleod-Sugden
-gamma = sec.macleod_sugden(rho_L, rho_V, parachor)
+# Populate pure-component cache at a given temperature
+sec.batch_pure_component_cDFT(["carbon dioxide", "methane"], T_K=270.0)
+
+# Parachor numbers for the cached components
+parachors = sec.batch_parachor_numbers(["carbon dioxide", "methane"], T_K=270.0)
+
+# Single-point mixture IFT via the three methods
+gamma_par = sec.parachor_mixture_IFT(x, y, rho_l, rho_v, parachors)
+gamma_wsd = sec.wsd_mixture_IFT(T_K=270.0, x=x, y=y, rho_l=rho_l, rho_v=rho_v)
+
+# Multi-point sweep over the two-phase PT region
+data = sec.compute_PT_colormap_data(...)
+
+# Export to DataFrame / CSV
+df = sec.data_to_dataframe(data, component_names=["carbon dioxide", "methane"])
 ```
 
 ---
