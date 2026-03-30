@@ -89,6 +89,18 @@ class semi_emperical_correlations:
         Number of DFT grid points for the planar-interface solve. Default is 1024.
     l_grid : float, optional
         cDFT domain length in Angstroms. Default is 100.0 A.
+    dynamic_lgrid : bool, optional
+        When ``True``, the domain length is scaled as
+        ``l_grid * (1 - T/Tc)^{-0.5}`` for each component so that the box
+        grows near the critical point where the interface becomes diffuse.
+        This improves cDFT convergence close to Tc at the cost of a larger
+        (and slower) solve for those temperatures.  Default is ``False``.
+    dynamic_ngrid : bool, optional
+        When ``True``, the number of grid points is scaled by the same factor
+        as ``dynamic_lgrid``, i.e. ``n_grid * (1 - T/Tc)^{-0.5}``, so that
+        the grid spacing (Å/point) stays constant as the domain expands near
+        Tc.  Has no effect unless ``dynamic_lgrid`` is also ``True``.
+        Default is ``False``.
 
     Attributes
     ----------
@@ -150,14 +162,20 @@ class semi_emperical_correlations:
 
     def __init__(
         self,
-        n_grid: int     = 1024,
-        l_grid: float   = 100.0,
+        n_grid: int          = 1024,
+        l_grid: float        = 100.0,
+        dynamic_lgrid: bool  = False,
+        dynamic_ngrid: bool  = False,
+        max_scale: float     = 10.0,
     ) -> None:
 
-        self._parameters_fn = PARAMETERS
-        self._density_fn    = molar_density_mol_m3
-        self._n_grid        = n_grid
-        self._l_grid            = l_grid
+        self._parameters_fn  = PARAMETERS
+        self._density_fn     = molar_density_mol_m3
+        self._n_grid         = n_grid
+        self._l_grid         = l_grid
+        self._dynamic_lgrid  = dynamic_lgrid
+        self._dynamic_ngrid  = dynamic_ngrid
+        self._max_scale      = max_scale
 
         self.component_names: list[str] | None = None
         self.T_K_cached: float | None = None
@@ -176,6 +194,8 @@ class semi_emperical_correlations:
         self,
         component_name: str,
         T_K: float,
+        dynamic_lgrid: bool | None = None,
+        dynamic_ngrid: bool | None = None,
     ) -> tuple[float, float, float, float, float, float]:
         """
         Run a PC-SAFT EoS + planar cDFT solve for one pure component.
@@ -186,6 +206,18 @@ class semi_emperical_correlations:
             Name accepted by FeosPlugin.PARAMETERS.
         T_K : float
             Temperature [K].
+        dynamic_lgrid : bool or None, optional
+            Override the instance-level ``dynamic_lgrid`` setting for this
+            call only.  When ``True``, the cDFT domain length is scaled as
+            ``l_grid * (1 - T/Tc)^{-0.5}`` so that the box grows near the
+            critical point where the interface becomes diffuse.  Defaults to
+            ``None``, which inherits from ``self._dynamic_lgrid``.
+        dynamic_ngrid : bool or None, optional
+            Override the instance-level ``dynamic_ngrid`` setting for this
+            call only.  When ``True``, the grid point count is scaled by the
+            same factor as the domain so that grid spacing (Å/point) remains
+            constant.  Defaults to ``None``, which inherits from
+            ``self._dynamic_ngrid``.
 
         Returns
         -------
@@ -202,6 +234,8 @@ class semi_emperical_correlations:
         Psat : float
             Saturation pressure [bar]. NaN if SC.
         """
+        use_dynamic_l = self._dynamic_lgrid if dynamic_lgrid is None else dynamic_lgrid
+        use_dynamic_n = self._dynamic_ngrid if dynamic_ngrid is None else dynamic_ngrid
 
         params  = self._parameters_fn([component_name])
         eos     = feos.HelmholtzEnergyFunctional.pcsaft(params)
@@ -212,6 +246,17 @@ class semi_emperical_correlations:
 
         if T_K >= Tc_K:
             return np.nan, np.nan, np.nan, Tc_K, Pc_bar, np.nan
+
+        # Dynamic domain/grid: scale with (1 - T/Tc)^{-0.5} near the critical
+        # point so the box always contains the full diffuse interface.
+        if use_dynamic_l:
+            T_red  = T_K / Tc_K
+            scale  = min(max(1.0, (1.0 - T_red) ** (-0.5)), self._max_scale)
+            l_grid = self._l_grid * scale
+            n_grid = int(self._n_grid * scale) if use_dynamic_n else self._n_grid
+        else:
+            l_grid = self._l_grid
+            n_grid = self._n_grid
 
         try:
             vle = feos.PhaseEquilibrium.pure(eos, T_K * si.KELVIN)
@@ -234,10 +279,10 @@ class semi_emperical_correlations:
         try:
             interface   = feos.PlanarInterface.from_tanh(
                 vle     =vle,
-                n_grid  =self._n_grid,
-                l_grid  =self._l_grid * si.ANGSTROM,
+                n_grid  =n_grid,
+                l_grid  =l_grid * si.ANGSTROM,
                 critical_temperature=cp.temperature)
-            
+
             sol     = interface.solve()
             gamma0  = float(sol.surface_tension * 1e3 / si.NEWTON * si.METER)
 
@@ -254,6 +299,8 @@ class semi_emperical_correlations:
         self,
         component_names: list[str],
         T_K: float,
+        dynamic_lgrid: bool | None = None,
+        dynamic_ngrid: bool | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Compute and cache pure-component IFT and saturation densities for a list
@@ -265,6 +312,17 @@ class semi_emperical_correlations:
             List of component names accepted by FeosPlugin.PARAMETERS.
         T_K : float
             Temperature [K].
+        dynamic_lgrid : bool or None, optional
+            Override the instance-level ``dynamic_lgrid`` setting for this
+            batch.  When ``True``, each component's cDFT domain is scaled
+            with ``(1 - T/Tc)^{-0.5}`` to capture the diffuse interface near
+            the critical point.  Defaults to ``None`` (inherits from
+            ``self._dynamic_lgrid``).
+        dynamic_ngrid : bool or None, optional
+            Override the instance-level ``dynamic_ngrid`` setting for this
+            batch.  When ``True``, grid points scale by the same factor as the
+            domain so grid spacing stays constant.  Defaults to ``None``
+            (inherits from ``self._dynamic_ngrid``).
 
         Returns
         -------
@@ -292,7 +350,7 @@ class semi_emperical_correlations:
 
         for i, name in enumerate(component_names):
             gamma0_arr[i], rhoL0_arr[i], rhoV0_arr[i], Tc_arr[i], Pc_arr[i], Psat_arr[i] = (
-                self._pure_component_cDFT(name, T_K)
+                self._pure_component_cDFT(name, T_K, dynamic_lgrid=dynamic_lgrid, dynamic_ngrid=dynamic_ngrid)
             )
 
         self.component_names = list(component_names)

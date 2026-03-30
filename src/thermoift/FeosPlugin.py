@@ -1081,13 +1081,17 @@ class VLECalculator:
         return np.unique(np.concatenate([T_lower, T_upper]))
 
     @staticmethod
-    def compute_phase_envelope(eos_or_fn, T_vals, feed, verbose, Tc=None):
+    def compute_phase_envelope(eos_or_fn, T_vals, feed, verbose, Tc=None, Pc=None):
         """
         Compute bubble and dew curves together and apply joint cleaning.
 
         Runs ``compute_bubble_curve`` and ``compute_dew_curve``, applies
         Step 1 (non-physical filter) and Step 2 (trivial-solution
         cross-check) via ``_clean_envelope_curve``.
+
+        Both curves are always terminated with the exact critical point
+        ``(Tc, Pc)`` when both are supplied, so the envelope closes
+        correctly regardless of T_STEP or solver failures near Tc.
 
         Parameters
         ----------
@@ -1100,7 +1104,12 @@ class VLECalculator:
             Feed composition
         verbose : bool
         Tc : float, optional
-            Critical temperature [K] for the trivial-solution check.
+            Critical temperature [K] for the trivial-solution check and
+            curve termination.
+        Pc : float, optional
+            Critical pressure [bar]. When provided together with ``Tc``,
+            the point ``(Tc, Pc)`` is appended to both curves so they
+            always meet at the critical point.
 
         Returns
         -------
@@ -1116,7 +1125,18 @@ class VLECalculator:
             T_dew_raw, P_dew_raw,
             T_other=T_bub_raw, P_other=P_bub_raw, Tc=Tc)
 
-        return list(T_bub), list(P_bub), list(T_dew), list(P_dew)
+        T_bub, P_bub = list(T_bub), list(P_bub)
+        T_dew, P_dew = list(T_dew), list(P_dew)
+
+        # Pin both curves to the exact critical point so they always close,
+        # regardless of T_STEP size or solver failures near Tc.
+        if Tc is not None and Pc is not None:
+            T_bub.append(float(Tc))
+            P_bub.append(float(Pc))
+            T_dew.append(float(Tc))
+            P_dew.append(float(Pc))
+
+        return T_bub, P_bub, T_dew, P_dew
 
     @staticmethod
     def compute_critical_point(eos, z, T_guess):
@@ -1198,7 +1218,9 @@ class InterfacialTensionCalculator:
     """
 
     @staticmethod
-    def build_planar_interface(eq, critical_temperature, n_grid, l_grid):
+    def build_planar_interface(eq, critical_temperature, n_grid, l_grid,
+                               T_K=None, Tc_K=None, dynamic_lgrid=False,
+                               dynamic_ngrid=False, max_scale=10.0):
         """
         Create a planar interface object.
 
@@ -1212,12 +1234,32 @@ class InterfacialTensionCalculator:
             Number of grid points
         l_grid : float
             Domain length [Angstrom]
+        T_K : float, optional
+            Current temperature [K]. Required for dynamic_lgrid/dynamic_ngrid.
+        Tc_K : float, optional
+            Mixture critical temperature [K]. Required for dynamic_lgrid/dynamic_ngrid.
+        dynamic_lgrid : bool, optional
+            When ``True``, scale the domain as
+            ``l_grid * (1 - T/Tc)^{-0.5}`` so the box grows near Tc
+            where the interface becomes diffuse. Default is ``False``.
+        dynamic_ngrid : bool, optional
+            When ``True``, scale the grid point count by the same factor as
+            ``dynamic_lgrid`` so grid spacing (Å/point) stays constant.
+            Has no effect unless ``dynamic_lgrid`` is also ``True``.
+            Default is ``False``.
 
         Returns
         -------
         feos.PlanarInterface
             Interface object
         """
+        if dynamic_lgrid and T_K is not None and Tc_K is not None:
+            T_red  = T_K / Tc_K
+            scale  = min(max(1.0, (1.0 - T_red) ** (-0.5)), max_scale)
+            l_grid = l_grid * scale
+            if dynamic_ngrid:
+                n_grid = int(n_grid * scale)
+
         return feos.PlanarInterface.from_tanh(
             vle=eq,
             n_grid=n_grid,
@@ -2073,10 +2115,14 @@ def tp_flash(feos_module, eos, T, P, feed, molar_masses):
     return VLECalculator.tp_flash(eos, T, P, feed, molar_masses)
 
 # Interfacial tension
-def build_planar_interface(eq, critical_temperature, n_grid, l_grid):
+def build_planar_interface(eq, critical_temperature, n_grid, l_grid,
+                           T_K=None, Tc_K=None, dynamic_lgrid=False,
+                           dynamic_ngrid=False, max_scale=10.0):
     """Backward compatibility wrapper."""
     return InterfacialTensionCalculator.build_planar_interface(
-        eq, critical_temperature, n_grid, l_grid)
+        eq, critical_temperature, n_grid, l_grid,
+        T_K=T_K, Tc_K=Tc_K, dynamic_lgrid=dynamic_lgrid,
+        dynamic_ngrid=dynamic_ngrid, max_scale=max_scale)
 
 def solve_interface_properties(interface, si_module):
     """Backward compatibility wrapper."""
