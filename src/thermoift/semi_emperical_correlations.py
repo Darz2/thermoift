@@ -1533,10 +1533,11 @@ class semi_emperical_correlations:
         ML_mode: bool = True,
         main_component_index: int = 0,
         all_components: list[str] | None = None,
+        verbose: bool = False,
     ) -> dict[str, pd.DataFrame]:
         """
         Save saturation IFT DataFrames to separate CSV files by method and line.
- 
+
         Since parachor and WSD methods may have different row counts, this saves
         them as separate files rather than merging.
  
@@ -1734,7 +1735,8 @@ class semi_emperical_correlations:
             para_path = os.path.join(output_dir, f"{line}_parachor.csv")
             df_para.to_csv(para_path, index=False)
             result[f"{line}_parachor"] = df_para
-            print(f"Saved {para_path} ({len(df_para)} rows, {len(df_para.columns)} cols)")
+            if verbose:
+                print(f"Saved {para_path} ({len(df_para)} rows, {len(df_para.columns)} cols)")
  
             # --- WSD method ---
             df_wsd_full = df_sat_wsd[df_sat_wsd["line"] == line].copy()
@@ -1762,7 +1764,8 @@ class semi_emperical_correlations:
             wsd_path = os.path.join(output_dir, f"{line}_wsd.csv")
             df_wsd.to_csv(wsd_path, index=False)
             result[f"{line}_wsd"] = df_wsd
-            print(f"Saved {wsd_path} ({len(df_wsd)} rows, {len(df_wsd.columns)} cols)")
+            if verbose:
+                print(f"Saved {wsd_path} ({len(df_wsd)} rows, {len(df_wsd.columns)} cols)")
  
         return result
 
@@ -1784,6 +1787,7 @@ class semi_emperical_correlations:
         filename_parachor: str = "PT_parachor",
         filename_parachor_fixed: str = "PT_parachor_fixed",
         filename_wsd: str = "PT_wsd",
+        verbose: bool = False,
     ) -> dict[str, pd.DataFrame]:
         """
         Save PT colormap IFT DataFrames to CSV files, one per method.
@@ -2006,7 +2010,8 @@ class semi_emperical_correlations:
         path = os.path.join(output_dir, f"{filename_parachor}.csv")
         df_para.to_csv(path, index=False)
         result["PT_parachor"] = df_para
-        print(f"Saved {path} ({len(df_para)} rows, {len(df_para.columns)} cols)")
+        if verbose:
+            print(f"Saved {path} ({len(df_para)} rows, {len(df_para.columns)} cols)")
 
         # ------------------------------------------------------------------
         # Parachor (fixed T_ref) – optional
@@ -2031,7 +2036,8 @@ class semi_emperical_correlations:
             df_fixed.to_csv(path, index=False)
             result["PT_parachor_fixed"] = df_fixed
             suffix = f" (T_ref={T_ref_fixed} K)" if T_ref_fixed is not None else ""
-            print(f"Saved {path} ({len(df_fixed)} rows, {len(df_fixed.columns)} cols){suffix}")
+            if verbose:
+                print(f"Saved {path} ({len(df_fixed)} rows, {len(df_fixed.columns)} cols){suffix}")
 
         # ------------------------------------------------------------------
         # WSD
@@ -2069,7 +2075,8 @@ class semi_emperical_correlations:
         path = os.path.join(output_dir, f"{filename_wsd}.csv")
         df_wsd.to_csv(path, index=False)
         result["PT_wsd"] = df_wsd
-        print(f"Saved {path} ({len(df_wsd)} rows, {len(df_wsd.columns)} cols)")
+        if verbose:
+            print(f"Saved {path} ({len(df_wsd)} rows, {len(df_wsd.columns)} cols)")
 
         return result
 

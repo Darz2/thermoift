@@ -1499,7 +1499,7 @@ class DataProcessor:
         return row
 
     @staticmethod
-    def summarize_vle_dft(VLE_DFT):
+    def summarize_vle_dft(VLE_DFT, verbose=False):
         """
         Print a summary of VLE-DFT data structure.
 
@@ -1515,7 +1515,8 @@ class DataProcessor:
         dict
             Summary statistics for each feed
         """
-        print("Available feeds:", list(VLE_DFT.keys()))
+        if verbose:
+            print("Available feeds:", list(VLE_DFT.keys()))
 
         summary = {}
 
@@ -1530,8 +1531,9 @@ class DataProcessor:
                 for data_list in VLE_DFT[feed_key]["interfacial_data"].values()
             )
 
-            print(f"{feed_key}: {n_bubble} bubble pts, {n_dew} dew pts, "
-                  f"{n_temps} isotherms, {total_interfacial} interfacial pts")
+            if verbose:
+                print(f"{feed_key}: {n_bubble} bubble pts, {n_dew} dew pts, "
+                      f"{n_temps} isotherms, {total_interfacial} interfacial pts")
 
             summary[feed_key] = {
                 "n_bubble_points": n_bubble,
