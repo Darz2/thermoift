@@ -341,6 +341,8 @@ class MLPostprocessing:
         model_name: str = "Model",
         save_path: Optional[str] = None,
         folder: str = "PLOTS",
+        cv_r2: Optional[float] = None,
+        cv_rmse: Optional[float] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Plot parity plot (actual vs predicted).
@@ -356,6 +358,10 @@ class MLPostprocessing:
             Name of the model for legend (used only when no datasets).
         save_path : str, optional
             Base filename to save the figure.
+        cv_r2 : float, optional
+            Mean R² from k-fold cross-validation to display on the plot.
+        cv_rmse : float, optional
+            Mean RMSE from k-fold cross-validation to display on the plot.
 
         Returns
         -------
@@ -431,6 +437,23 @@ class MLPostprocessing:
         ax.yaxis.set_minor_locator(AutoMinorLocator(2))
         ax.tick_params(axis="both", which="minor", length=3)
 
+        # Cross-validation annotation
+        if cv_r2 is not None or cv_rmse is not None:
+            cv_lines = []
+            if cv_r2 is not None:
+                cv_lines.append(rf"CV $R^2$ = {cv_r2:.4f}")
+            if cv_rmse is not None:
+                cv_lines.append(rf"CV RMSE = {cv_rmse:.4f}")
+            cv_text = "\n".join(cv_lines)
+            ax.text(
+                0.95, 0.05, cv_text,
+                transform=ax.transAxes,
+                fontsize=ps.label_fontsize * 0.6,
+                verticalalignment="bottom",
+                horizontalalignment="right",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="black", alpha=0.9),
+            )
+
         plt.tight_layout()
 
         if save_path:
@@ -444,6 +467,8 @@ class MLPostprocessing:
         bins: int = 40,
         save_path: Optional[str] = None,
         folder: str = "PLOTS",
+        cv_r2: Optional[float] = None,
+        cv_rmse: Optional[float] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Plot histogram of residuals.
@@ -454,6 +479,10 @@ class MLPostprocessing:
             Number of histogram bins.
         save_path : str, optional
             Base filename to save the figure.
+        cv_r2 : float, optional
+            Mean R² from k-fold cross-validation to display on the plot.
+        cv_rmse : float, optional
+            Mean RMSE from k-fold cross-validation to display on the plot.
 
         Returns
         -------
@@ -489,6 +518,10 @@ class MLPostprocessing:
             f"Std Dev = {std_resid:.2f} / {unit}\n"
             f"RMSE = {self.rmse:.2f} / {unit}"
         )
+        if cv_r2 is not None:
+            textstr += f"\nCV $R^2$ = {cv_r2:.4f}"
+        if cv_rmse is not None:
+            textstr += f"\nCV RMSE = {cv_rmse:.4f}"
 
         ax.text(
             0.025, 0.9, textstr,
@@ -527,6 +560,8 @@ class MLPostprocessing:
         self,
         save_path: Optional[str] = None,
         folder: str = "PLOTS",
+        cv_r2: Optional[float] = None,
+        cv_rmse: Optional[float] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Plot residuals vs predicted values.
@@ -535,6 +570,10 @@ class MLPostprocessing:
         ----------
         save_path : str, optional
             Base filename to save the figure.
+        cv_r2 : float, optional
+            Mean R² from k-fold cross-validation to display on the plot.
+        cv_rmse : float, optional
+            Mean RMSE from k-fold cross-validation to display on the plot.
 
         Returns
         -------
@@ -569,6 +608,23 @@ class MLPostprocessing:
         ax.xaxis.set_minor_locator(AutoMinorLocator(2))
         ax.yaxis.set_minor_locator(AutoMinorLocator(2))
         ax.tick_params(axis="both", which="minor", length=3)
+
+        # Cross-validation annotation
+        if cv_r2 is not None or cv_rmse is not None:
+            cv_lines = []
+            if cv_r2 is not None:
+                cv_lines.append(rf"CV $R^2$ = {cv_r2:.4f}")
+            if cv_rmse is not None:
+                cv_lines.append(rf"CV RMSE = {cv_rmse:.4f}")
+            cv_text = "\n".join(cv_lines)
+            ax.text(
+                0.95, 0.95, cv_text,
+                transform=ax.transAxes,
+                fontsize=ps.label_fontsize * 0.6,
+                verticalalignment="top",
+                horizontalalignment="right",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="black", alpha=0.9),
+            )
 
         plt.tight_layout()
 
