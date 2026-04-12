@@ -6,6 +6,7 @@ src/thermoift/FeosPlugin.py
 src/thermoift/ML_feeds.py
 src/thermoift/ML_postprocessing.py
 src/thermoift/ML_preprocessing.py
+src/thermoift/ML_preprocessing_SEC.py
 src/thermoift/PLOT_SETTINGS.py
 src/thermoift/__init__.py
 src/thermoift/rng_utils.py

@@ -245,6 +245,7 @@ def save_plot(fig, filename_base, folder="PLOTS"):
 component_map = {
     "CO2": r"\mathrm{CO_2}",
     "Carbon dioxide": r"\mathrm{CO_2}",
+    "carbon_dioxide": r"\mathrm{CO_2}",
 
     "H2": r"\mathrm{H_2}",
     "Hydrogen": r"\mathrm{H_2}",
@@ -266,6 +267,7 @@ component_map = {
 
     "CO": r"\mathrm{CO}",
     "Carbon monoxide": r"\mathrm{CO}",
+    "carbon_monoxide": r"\mathrm{CO}",
 
     "NO2": r"\mathrm{NO_2}",
     "Nitrogen dioxide": r"\mathrm{NO_2}",
@@ -278,6 +280,7 @@ component_map = {
 
     "H2S": r"\mathrm{H_2S}",
     "Hydrogen sulfide": r"\mathrm{H_2S}",
+    "Hydrogen_sulfide": r"\mathrm{H_2S}",
 
     "C3H8": r"\mathrm{C_3H_8}",
     "Propane": r"\mathrm{C_3H_8}",
@@ -327,6 +330,8 @@ def format_z_latex(mixture, z):
 label_map = {
     "temperature": r"$T$ / [K]",
     "pressure": r"$P$ / [bar]",
+    "T": r"$T$ / [K]",
+    "P": r"$P$ / [bar]",
     "Tc": r"$T_{\mathrm{c}}$ / [K]",
     "Pc": r"$P_{\mathrm{c}}$ / [bar]",
     "P_bubble": r"$P_{\mathrm{bubble}}$ / [bar]",
@@ -335,6 +340,7 @@ label_map = {
     "vapor_density": r"$\rho_{\mathrm{vap}}$ / [kg m$^{-3}$]",
     "gamma": r"$\gamma$ / [mN m$^{-1}$]",
     "interfacial_thickness": r"$L_{90-10}$ / [nm]",
+    "residual" : r"$\Delta \gamma$ / [mN m$^{-1}$]",
 }
 
 for comp, comp_tex in component_map.items():

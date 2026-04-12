@@ -122,6 +122,16 @@ class MLPostprocessing:
         plot_residual_vs_predicted(save_path)
             Residuals vs predicted values.
 
+    GPR-specific (require predictive std):
+        plot_std_histogram(y_std, save_path)
+            Histogram of GPR predictive standard deviation.
+        plot_parity_colored_by_std(y_std, save_path)
+            Parity plot with points colored by predictive std.
+        plot_error_vs_std(y_std, save_path)
+            Absolute error vs predictive std (calibration plot).
+        plot_response_curves(model, X_ref, feature_names, save_path)
+            One-at-a-time response curves for each feature.
+
     Metrics:
         summary()
             Get summary of model performance metrics.
@@ -631,6 +641,514 @@ class MLPostprocessing:
         if save_path:
             ps.save_plot(fig, save_path, folder=folder)
 
+        plt.show()
+        return fig, ax
+
+    # ------------------------------------------------------------------
+    # GPR-specific plots
+    # ------------------------------------------------------------------
+
+    def plot_std_histogram(
+        self,
+        y_std: Union[np.ndarray, List],
+        bins: int = 40,
+        save_path: Optional[str] = None,
+        folder: str = "PLOTS",
+    ) -> Tuple[plt.Figure, plt.Axes]:
+        """
+        Plot histogram of GPR predictive standard deviation.
+
+        Parameters
+        ----------
+        y_std : array-like
+            Predictive standard deviations from ``model.predict(return_std=True)``.
+        bins : int, default 40
+            Number of histogram bins.
+        save_path : str, optional
+            Base filename to save the figure.
+
+        Returns
+        -------
+        Tuple[plt.Figure, plt.Axes]
+        """
+        y_std = np.asarray(y_std)
+        fig, ax = ps.plot_init()
+
+        ax.hist(
+            y_std,
+            bins=bins,
+            alpha=0.75,
+            facecolor=self.colors["facecolor"],
+            edgecolor=self.colors["edgecolor"],
+            linewidth=0.8,
+        )
+
+        target_label = self._get_target_label()
+        unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
+        ax.set_xlabel(rf"Predictive $\sigma$ / {unit}", fontsize=ps.label_fontsize * 0.9)
+        ax.set_ylabel("Count", fontsize=ps.label_fontsize * 0.9)
+        ax.set_title("GPR Predictive Uncertainty Distribution",
+                     fontsize=ps.title_fontsize * 0.75, fontweight="bold")
+
+        textstr = (
+            f"Mean = {y_std.mean():.4f}\n"
+            f"Median = {np.median(y_std):.4f}\n"
+            f"Max = {y_std.max():.4f}"
+        )
+        ax.text(
+            0.975, 0.9, textstr,
+            transform=ax.transAxes, fontsize=6,
+            verticalalignment="top", horizontalalignment="right",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        )
+
+        ps.apply_axis_style(ax)
+        ax.minorticks_on()
+        ax.xaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.tick_params(axis="both", which="minor", length=3)
+
+        plt.tight_layout()
+        if save_path:
+            ps.save_plot(fig, save_path, folder=folder)
+        plt.show()
+        return fig, ax
+
+    def plot_parity_colored_by_std(
+        self,
+        y_std: Union[np.ndarray, List],
+        save_path: Optional[str] = None,
+        folder: str = "PLOTS",
+    ) -> Tuple[plt.Figure, plt.Axes]:
+        """
+        Parity plot with points colored by predictive standard deviation.
+
+        High-uncertainty predictions are immediately visible against the
+        perfect-prediction diagonal.
+
+        Parameters
+        ----------
+        y_std : array-like
+            Predictive standard deviations (one per test sample).
+        save_path : str, optional
+            Base filename to save the figure.
+
+        Returns
+        -------
+        Tuple[plt.Figure, plt.Axes]
+        """
+        y_std = np.asarray(y_std)
+        fig, ax = ps.plot_init()
+
+        sc = ax.scatter(
+            self.y_true, self.y_pred,
+            c=y_std, cmap="plasma",
+            alpha=0.85, s=20,
+            linewidths=0.4, edgecolors="none",
+        )
+
+        target_label = self._get_target_label()
+        unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
+        cbar = fig.colorbar(sc, ax=ax, pad=0.02)
+        cbar.set_label(rf"$\sigma$ / {unit}", fontsize=ps.label_fontsize * 0.8)
+        ps.style_colorbar(cbar)
+
+        lims = [
+            min(self.y_true.min(), self.y_pred.min()) - 0.5,
+            max(self.y_true.max(), self.y_pred.max()) + 0.5,
+        ]
+        ax.plot(lims, lims, "k--", linewidth=1.4,
+                label=rf"Perfect prediction ($R^2$ = {self.r2:.4f})")
+        ax.set_xlim(lims)
+        ax.set_ylim(lims)
+
+        ax.set_xlabel(f"Actual {target_label}", fontsize=ps.label_fontsize * 0.9)
+        ax.set_ylabel(f"Predicted {target_label}", fontsize=ps.label_fontsize * 0.9)
+
+        ps.apply_axis_style(ax)
+        ax.legend(fontsize=ps.label_fontsize * 0.6, loc="upper left",
+                  edgecolor="black", framealpha=1.0)
+        ax.minorticks_on()
+        ax.xaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.tick_params(axis="both", which="minor", length=3)
+
+        plt.tight_layout()
+        if save_path:
+            ps.save_plot(fig, save_path, folder=folder)
+        plt.show()
+        return fig, ax
+
+    def plot_error_vs_std(
+        self,
+        y_std: Union[np.ndarray, List],
+        save_path: Optional[str] = None,
+        folder: str = "PLOTS",
+    ) -> Tuple[plt.Figure, plt.Axes]:
+        """
+        Absolute error vs predictive standard deviation (calibration plot).
+
+        Well-calibrated GPRs should have most points below the
+        ``|ε| = σ`` diagonal and nearly all below ``|ε| = 2σ``.
+
+        Parameters
+        ----------
+        y_std : array-like
+            Predictive standard deviations (one per test sample).
+        save_path : str, optional
+            Base filename to save the figure.
+
+        Returns
+        -------
+        Tuple[plt.Figure, plt.Axes]
+        """
+        y_std = np.asarray(y_std)
+        abs_error = np.abs(self.residuals)
+
+        fig, ax = ps.plot_init()
+
+        ax.scatter(
+            y_std, abs_error,
+            alpha=0.6, s=15,
+            facecolors=self.colors["facecolor"],
+            edgecolors=self.colors["edgecolor"],
+            linewidths=0.4,
+            label="Test samples",
+        )
+
+        lim = max(y_std.max(), abs_error.max()) * 1.05
+        ref_x = np.linspace(0, lim, 200)
+        ax.plot(ref_x, ref_x, "k--", linewidth=1.3, label=r"$|\epsilon| = \sigma$ (ideal)")
+        ax.plot(ref_x, 2 * ref_x, "b-.", linewidth=1.0, alpha=0.7, label=r"$|\epsilon| = 2\sigma$")
+        ax.set_xlim(0, lim)
+        ax.set_ylim(0, lim)
+
+        target_label = self._get_target_label()
+        unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
+        ax.set_xlabel(rf"Predictive $\sigma$ / {unit}", fontsize=ps.label_fontsize * 0.9)
+        ax.set_ylabel(rf"$|\epsilon|$ / {unit}", fontsize=ps.label_fontsize * 0.9)
+        ax.set_title("Error vs Uncertainty Calibration",
+                     fontsize=ps.title_fontsize * 0.75, fontweight="bold")
+
+        within_1s = np.mean(abs_error <= y_std) * 100
+        within_2s = np.mean(abs_error <= 2 * y_std) * 100
+        textstr = f"Within $1\\sigma$: {within_1s:.1f}%\nWithin $2\\sigma$: {within_2s:.1f}%"
+        ax.text(
+            0.975, 0.05, textstr,
+            transform=ax.transAxes, fontsize=6,
+            verticalalignment="bottom", horizontalalignment="right",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        )
+
+        ps.apply_axis_style(ax)
+        ps.style_legend(ax, fontsize=ps.label_fontsize * 0.55, loc="upper left")
+        ax.minorticks_on()
+        ax.xaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.tick_params(axis="both", which="minor", length=3)
+
+        plt.tight_layout()
+        if save_path:
+            ps.save_plot(fig, save_path, folder=folder)
+        plt.show()
+        return fig, ax
+
+    def plot_response_curves(
+        self,
+        model,
+        X_ref: Union[np.ndarray, "pd.Series"],
+        feature_names: List[str],
+        X_train: Optional[Union[np.ndarray, "pd.DataFrame"]] = None,
+        n_points: int = 100,
+        return_std: bool = False,
+        save_individually: bool = False,
+        save_path: Optional[str] = None,
+        folder: str = "PLOTS",
+    ) -> Tuple[plt.Figure, np.ndarray]:
+        """
+        One-at-a-time response curves: sweep each feature while holding
+        all others fixed at ``X_ref``.
+
+        Parameters
+        ----------
+        model : sklearn estimator
+            Fitted model with a ``predict`` method (Pipeline supported).
+        X_ref : array-like, shape (n_features,)
+            Reference point (e.g. median of training data) to anchor
+            all non-swept features.
+        feature_names : List[str]
+            Names of features in the same order as ``X_ref`` columns.
+        X_train : array-like, shape (n_samples, n_features), optional
+            Training data used to determine realistic sweep ranges via
+            ``[min, max]`` per feature.  If ``None``, falls back to
+            ±50 % around the reference value (0–1 for ``z_`` columns).
+        n_points : int, default 100
+            Resolution of each sweep.
+        return_std : bool, default False
+            If ``True``, call ``model.predict(return_std=True)`` and
+            shade ±1σ and ±2σ bands around the mean curve.
+        save_individually : bool, default False
+            If ``True``, save each feature as a separate figure named
+            ``{save_path}_{feat_name}``.  The combined overview figure
+            is shown on screen but not saved.
+            If ``False``, save the combined multi-panel figure.
+        save_path : str, optional
+            Base filename for saving.
+
+        Returns
+        -------
+        Tuple[plt.Figure, np.ndarray]
+            Combined figure and flattened array of Axes.
+        """
+        X_ref = np.asarray(X_ref, dtype=float).ravel()
+        n_features = len(feature_names)
+
+        # Determine sweep bounds
+        if X_train is not None:
+            X_train_arr = np.asarray(X_train)
+            feat_min = X_train_arr.min(axis=0)
+            feat_max = X_train_arr.max(axis=0)
+        else:
+            feat_min = np.where(X_ref > 0, X_ref * 0.5, X_ref * 1.5)
+            feat_max = np.where(X_ref > 0, X_ref * 1.5, X_ref * 0.5)
+            for i, name in enumerate(feature_names):
+                if name.startswith("z_") and 0.0 <= X_ref[i] <= 1.0:
+                    feat_min[i], feat_max[i] = 0.0, 1.0
+
+        target_label = self._get_target_label()
+
+        # --- Run predictions once; cache for combined and individual figures ---
+        cache = []  # list of (feat_name, x_sweep, y_mean, y_sigma_or_None)
+        for i, feat_name in enumerate(feature_names):
+            x_sweep = np.linspace(feat_min[i], feat_max[i], n_points)
+            X_sweep_arr = np.tile(X_ref, (n_points, 1))
+            X_sweep_arr[:, i] = x_sweep
+            X_sweep = pd.DataFrame(X_sweep_arr, columns=feature_names)
+            if return_std:
+                y_mean, y_sigma = model.predict(X_sweep, return_std=True)
+            else:
+                y_mean = model.predict(X_sweep)
+                y_sigma = None
+            cache.append((feat_name, x_sweep, y_mean, y_sigma))
+
+        # --- Helper: draw one response curve onto an existing axis ---
+        def _draw_curve(ax, feat_name, x_sweep, y_mean, y_sigma, ref_val,
+                        show_ylabel=True, collect_handles=False):
+            feat_label = self._get_feature_label(feat_name)
+            handles = []
+            if y_sigma is not None:
+                ax.fill_between(x_sweep, y_mean - 2 * y_sigma, y_mean + 2 * y_sigma,
+                                alpha=0.12, color=self.colors["hist_color"])
+                h_band = ax.fill_between(x_sweep, y_mean - y_sigma, y_mean + y_sigma,
+                                         alpha=0.25, color=self.colors["hist_color"])
+                if collect_handles:
+                    handles.append((h_band, r"$\pm\sigma$"))
+            h_line, = ax.plot(x_sweep, y_mean, color=self.colors["edgecolor"], linewidth=1.5)
+            h_ref = ax.axvline(ref_val, color="gray", linewidth=0.9, linestyle=":", alpha=0.7)
+            if collect_handles:
+                handles = [(h_line, "Mean"), (h_ref, "Reference")] + handles
+            ax.set_xlabel(feat_label, fontsize=ps.label_fontsize * 0.8)
+            if show_ylabel:
+                ax.set_ylabel(target_label, fontsize=ps.label_fontsize * 0.8)
+            else:
+                ax.set_ylabel("")
+            ps.apply_axis_style(ax)
+            ax.minorticks_on()
+            ax.xaxis.set_minor_locator(AutoMinorLocator(2))
+            ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+            ax.tick_params(axis="both", which="minor", length=3)
+            return handles
+
+        # --- Combined overview figure ---
+        ncols = min(3, n_features)
+        nrows = int(np.ceil(n_features / ncols))
+        panel_w, panel_h = 4.0, 3.0
+        fig, axes = ps.plot_init_multi(
+            nrows=nrows, ncols=ncols,
+            w=ncols * panel_w, h=nrows * panel_h,
+        )
+        axes_flat = np.asarray(axes).ravel()
+        legend_handles = []
+
+        for i, (feat_name, x_sweep, y_mean, y_sigma) in enumerate(cache):
+            col = i % ncols
+            hdls = _draw_curve(
+                axes_flat[i], feat_name, x_sweep, y_mean, y_sigma,
+                ref_val=X_ref[i],
+                show_ylabel=(col == 0),
+                collect_handles=(i == 0),
+            )
+            if i == 0:
+                legend_handles = hdls
+
+        for j in range(n_features, len(axes_flat)):
+            axes_flat[j].set_visible(False)
+
+        if legend_handles:
+            handles, labels = zip(*legend_handles)
+            fig.legend(
+                handles, labels,
+                loc="lower center",
+                ncol=len(legend_handles),
+                fontsize=ps.label_fontsize * 0.7,
+                edgecolor="black",
+                framealpha=1.0,
+                bbox_to_anchor=(0.5, -0.02),
+            )
+
+        plt.tight_layout(rect=[0, 0.04, 1, 1])
+
+        if save_path and not save_individually:
+            ps.save_plot(fig, save_path, folder=folder)
+
+        plt.show()
+
+        # --- Individual figures (one per feature) ---
+        if save_individually and save_path:
+            for feat_name, x_sweep, y_mean, y_sigma in cache:
+                fig_i, ax_i = ps.plot_init()
+                _draw_curve(
+                    ax_i, feat_name, x_sweep, y_mean, y_sigma,
+                    ref_val=X_ref[feature_names.index(feat_name)],
+                    show_ylabel=True,
+                    collect_handles=False,
+                )
+                if y_sigma is not None or True:
+                    # minimal inline legend for individual plots
+                    from matplotlib.patches import Patch
+                    from matplotlib.lines import Line2D as _L2D
+                    legend_elems = [
+                        _L2D([0], [0], color=self.colors["edgecolor"], lw=1.5, label="Mean"),
+                        _L2D([0], [0], color="gray", lw=0.9, ls=":", label="Reference"),
+                    ]
+                    if y_sigma is not None:
+                        legend_elems.append(
+                            Patch(facecolor=self.colors["hist_color"], alpha=0.35, label=r"$\pm\sigma$")
+                        )
+                    ax_i.legend(handles=legend_elems, fontsize=ps.label_fontsize * 0.6,
+                                edgecolor="black", framealpha=1.0, loc="best")
+                plt.tight_layout()
+                ps.save_plot(fig_i, f"{save_path}_{feat_name}", folder=folder)
+                plt.close(fig_i)
+
+        return fig, axes_flat
+
+    def plot_reconstructed_parity(
+        self,
+        datasets_reconstructed: dict,
+        n_sigma: float = 2.0,
+        model_name: str = "GPR",
+        save_path: Optional[str] = None,
+        folder: str = "PLOTS",
+    ) -> Tuple[plt.Figure, plt.Axes]:
+        """
+        Parity plot of the reconstructed full target (γ_cDFT) with uncertainty.
+
+        Shows all splits together; uncertainty is drawn as ±n_sigma error bars
+        on the test set only (or all sets if stds are provided for each).
+
+        Parameters
+        ----------
+        datasets_reconstructed : dict
+            Each value is a 2- or 3-tuple ``(y_true, y_pred)`` or
+            ``(y_true, y_pred, y_std)``.  Supported keys:
+            ``"train"``, ``"test"``, ``"val"``.
+        n_sigma : float, default 2.0
+            Error bar half-width in units of σ.
+        model_name : str
+            Label prefix shown in the legend.
+        save_path : str, optional
+            Base filename to save the figure.
+
+        Returns
+        -------
+        Tuple[plt.Figure, plt.Axes]
+        """
+        fig, ax = ps.plot_init()
+
+        all_true, all_pred = [], []
+        split_labels = {"train": "Train", "test": "Test", "val": "Validation"}
+
+        for key in ["train", "test", "val"]:
+            if key not in datasets_reconstructed:
+                continue
+            entry = datasets_reconstructed[key]
+            y_t  = np.asarray(entry[0])
+            y_p  = np.asarray(entry[1])
+            y_s  = np.asarray(entry[2]) if len(entry) > 2 else None
+            all_true.append(y_t)
+            all_pred.append(y_p)
+
+            colors = SPLIT_COLORS[key]
+            r2 = r2_score(y_t, y_p)
+            label = rf"{split_labels[key]} ($R^2$ = {r2:.4f})"
+
+            if y_s is not None:
+                ax.errorbar(
+                    y_t, y_p,
+                    yerr=n_sigma * y_s,
+                    fmt="o",
+                    markersize=3,
+                    alpha=0.7,
+                    color=colors["edgecolor"],
+                    markerfacecolor=colors["facecolor"],
+                    markeredgecolor=colors["edgecolor"],
+                    elinewidth=0.6,
+                    capsize=1.5,
+                    capthick=0.6,
+                    label=label,
+                )
+            else:
+                ax.scatter(
+                    y_t, y_p,
+                    alpha=0.8, s=18,
+                    facecolors=colors["facecolor"],
+                    edgecolors=colors["edgecolor"],
+                    linewidths=0.6,
+                    label=label,
+                )
+
+        all_true = np.concatenate(all_true)
+        all_pred = np.concatenate(all_pred)
+        margin = 0.5
+        lims = [
+            min(all_true.min(), all_pred.min()) - margin,
+            max(all_true.max(), all_pred.max()) + margin,
+        ]
+        ax.plot(lims, lims, "k--", linewidth=1.4, label="Perfect prediction")
+        ax.set_xlim(lims)
+        ax.set_ylim(lims)
+
+        target_label = self._get_target_label()
+        ax.set_xlabel(f"Actual {target_label}", fontsize=ps.label_fontsize * 0.9)
+        ax.set_ylabel(f"Predicted {target_label}", fontsize=ps.label_fontsize * 0.9)
+
+        # Annotation: error bar caption
+        unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
+        ax.text(
+            0.97, 0.03,
+            rf"Error bars: $\pm {n_sigma:.0f}\sigma$",
+            transform=ax.transAxes,
+            fontsize=ps.label_fontsize * 0.6,
+            ha="right", va="bottom",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="black", alpha=0.85),
+        )
+
+        ps.apply_axis_style(ax)
+        ax.legend(
+            fontsize=ps.label_fontsize * 0.6,
+            loc="upper left",
+            edgecolor="black",
+            framealpha=1.0,
+        )
+        ax.minorticks_on()
+        ax.xaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.tick_params(axis="both", which="minor", length=3)
+
+        plt.tight_layout()
+        if save_path:
+            ps.save_plot(fig, save_path, folder=folder)
         plt.show()
         return fig, ax
 
