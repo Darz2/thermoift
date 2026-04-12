@@ -314,7 +314,10 @@ class MLPreprocessing:
         ylabel: Optional[str] = None,
         cbar_label: Optional[str] = None,
         title: Optional[str] = None,
+        hline: Optional[float] = None,
+        hline_kwargs: Optional[dict] = None,
         save_path: Optional[str] = None,
+        folder: str = "PLOTS",
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Plot scatter plot with color mapping.
@@ -329,8 +332,15 @@ class MLPreprocessing:
             Column name for color mapping.
         xlabel, ylabel, cbar_label, title : str, optional
             Custom labels. If None, uses PLOT_SETTINGS labels.
+        hline : float, optional
+            y-value for a horizontal reference line (e.g. ``0.0``).
+        hline_kwargs : dict, optional
+            Extra keyword arguments forwarded to ``ax.axhline``.
+            Defaults to ``{"color": "black", "linestyle": ":", "linewidth": 1.0}``.
         save_path : str, optional
             Base filename to save the figure.
+        folder : str, default "PLOTS"
+            Output folder passed to ``ps.save_plot``.
 
         Returns
         -------
@@ -357,6 +367,12 @@ class MLPreprocessing:
         if title:
             ax.set_title(title, fontsize=ps.title_fontsize, fontweight="bold")
 
+        if hline is not None:
+            kw = {"color": "black", "linestyle": "--", "linewidth": 1.0}
+            if hline_kwargs:
+                kw.update(hline_kwargs)
+            ax.axhline(hline, **kw)
+
         ps.apply_axis_style(ax)
         ax.minorticks_on()
         ax.xaxis.set_minor_locator(AutoMinorLocator(2))
@@ -366,7 +382,7 @@ class MLPreprocessing:
         plt.tight_layout()
 
         if save_path:
-            ps.save_plot(fig, save_path)
+            ps.save_plot(fig, save_path, folder=folder)
 
         plt.show()
         return fig, ax

@@ -2,13 +2,33 @@
 """
 ML Postprocessing module for ThermoIFT.
 
-Provides utilities for machine learning model evaluation,
-including feature importance, parity plots, and residual analysis.
+Provides standardised, publication-quality evaluation and visualisation
+utilities for regression models trained on thermodynamic mixture data.
+All plots use :mod:`thermoift.PLOT_SETTINGS` for consistent styling.
 
 Classes
 -------
 MLPostprocessing
-    Main class for ML model evaluation and visualization.
+    Central class for model evaluation: feature importance, parity plots,
+    residual diagnostics, GPR-specific uncertainty plots, 1-D response
+    curves, and 2-D T–P response surface heatmaps.
+
+Functions
+---------
+print_model_metrics
+    Compute and print train / test / validation R², RMSE, and MAE for
+    any scikit-learn-compatible regression model.
+
+Supported targets
+-----------------
+``"gamma"``
+    Interfacial tension γ [mN m⁻¹].
+``"delta_gamma"``
+    Residual interfacial tension Δγ = γ_cDFT − γ_base [mN m⁻¹].
+``"p_dew"``
+    Dew-point pressure P_dew [bar].
+``"p_bubble"``
+    Bubble-point pressure P_bubble [bar].
 
 Example
 -------
@@ -16,19 +36,26 @@ Example
 >>> post = MLPostprocessing(
 ...     y_true=y_test,
 ...     y_pred=y_pred,
-...     target="gamma",
-...     feature_importances=model.feature_importances_,
-...     feature_names=features
+...     target="delta_gamma",
+...     feature_importances=importances,
+...     feature_names=features,
+...     datasets={
+...         "train": (y_train, y_train_pred),
+...         "test":  (y_test,  y_test_pred),
+...     },
 ... )
->>> post.plot_parity(save_path="parity_plot")
->>> post.plot_residual_distribution(save_path="residual_dist")
+>>> post.plot_parity(save_path="parity_plot", folder="OUTPUTS")
+>>> post.plot_residual_distribution(save_path="residual_dist", folder="OUTPUTS")
+>>> post.plot_2d_response_surface(
+...     model=fitted_model, X_train=X_train,
+...     feature_names=features, save_path="surface_T_P", folder="OUTPUTS",
+... )
 """
 
 import numpy as np
 import pandas as pd
 from typing import Optional, List, Tuple, Union, Literal
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 from matplotlib.ticker import AutoMinorLocator
 from sklearn.metrics import r2_score, mean_squared_error
 import seaborn as sns
@@ -39,6 +66,11 @@ from . import PLOT_SETTINGS as ps
 # Color scheme for different targets
 TARGET_COLORS = {
     "gamma": {
+        "facecolor": "lightgreen",
+        "edgecolor": "darkgreen",
+        "hist_color": "green",
+    },
+    "delta_gamma": {
         "facecolor": "lightgreen",
         "edgecolor": "darkgreen",
         "hist_color": "green",
@@ -68,101 +100,122 @@ DEFAULT_COLORS = TARGET_COLORS["gamma"]
 
 class MLPostprocessing:
     """
-    Machine Learning Postprocessing utilities for model evaluation.
+    Publication-quality postprocessing for regression models on thermodynamic data.
 
-    This class provides methods for evaluating and visualizing ML model
-    performance, including feature importance analysis, parity plots,
-    and residual diagnostics. All plots use styling from PLOT_SETTINGS
-    for consistent, publication-quality figures.
+    Wraps a trained model's predictions with a suite of evaluation plots and
+    metrics.  All figures use :mod:`thermoift.PLOT_SETTINGS` for consistent
+    styling and can be saved to PDF/PNG via ``save_path`` + ``folder``.
 
     Parameters
     ----------
-    y_true : array-like
-        True target values.
-    y_pred : array-like
-        Predicted target values.
-    target : str, default "gamma"
-        Target variable name. Used for labels and color selection.
-        Supported: "gamma", "P_dew", "P_bubble".
-    feature_importances : array-like, optional
-        Feature importance values (e.g., from RandomForest).
+    y_true : array-like, shape (n_samples,)
+        Ground-truth target values (test set or whichever split is primary).
+    y_pred : array-like, shape (n_samples,)
+        Model predictions corresponding to ``y_true``.
+    target : str, default ``"gamma"``
+        Target variable key.  Controls axis labels, colour scheme, and LaTeX
+        symbols.  Supported values:
+
+        * ``"gamma"``       — interfacial tension γ [mN m⁻¹]
+        * ``"delta_gamma"`` — residual Δγ = γ_cDFT − γ_base [mN m⁻¹]
+        * ``"p_dew"``       — dew-point pressure [bar]
+        * ``"p_bubble"``    — bubble-point pressure [bar]
+    feature_importances : array-like, shape (n_features,), optional
+        Feature importance scores (e.g. normalised inverse ARD length-scales
+        for GPR, ``feature_importances_`` for tree-based models).
     feature_names : List[str], optional
-        Names of features corresponding to importances.
+        Feature names in the same order as ``feature_importances``.
+        Required when ``feature_importances`` is provided.
     label_map : dict, optional
-        Mapping from feature names to LaTeX labels.
+        Custom ``{feature_name: latex_label}`` mapping that overrides the
+        default look-up in :data:`thermoift.PLOT_SETTINGS.symbol_map`.
+    datasets : dict, optional
+        Train / test / validation splits for multi-split parity plots::
+
+            {
+                "train": (y_train_true, y_train_pred),
+                "test":  (y_test_true,  y_test_pred),
+                "val":   (y_val_true,   y_val_pred),   # optional
+            }
+
+        When provided, :meth:`plot_parity` colours each split separately and
+        shows per-split R² in the legend.
 
     Attributes
     ----------
     y_true : np.ndarray
-        True target values.
+        Ground-truth target values (primary split).
     y_pred : np.ndarray
-        Predicted target values.
+        Predicted target values (primary split).
     residuals : np.ndarray
-        Residuals (y_true - y_pred).
+        Signed residuals ``y_true − y_pred``.
     r2 : float
-        R-squared score.
+        R² score on the primary split.
     rmse : float
-        Root mean squared error.
+        Root-mean-squared error on the primary split.
     target : str
-        Target variable name.
+        Target variable key (lower-cased).
     colors : dict
-        Color scheme for plots.
+        Colour scheme dict ``{facecolor, edgecolor, hist_color}`` for the
+        active target.
 
     Methods
     -------
-    Feature Importance:
-        plot_feature_importance(scale, save_path)
-            Plot feature importance (linear or log scale).
+    Feature importance
+        .. autosummary::
 
-    Model Evaluation:
-        plot_parity(save_path)
-            Parity plot (actual vs predicted).
-        plot_residual_distribution(save_path)
-            Histogram of residuals.
-        plot_residual_vs_predicted(save_path)
-            Residuals vs predicted values.
+           plot_feature_importance
 
-    GPR-specific (require predictive std):
-        plot_std_histogram(y_std, save_path)
-            Histogram of GPR predictive standard deviation.
-        plot_parity_colored_by_std(y_std, save_path)
-            Parity plot with points colored by predictive std.
-        plot_error_vs_std(y_std, save_path)
-            Absolute error vs predictive std (calibration plot).
-        plot_response_curves(model, X_ref, feature_names, save_path)
-            One-at-a-time response curves for each feature.
+    General evaluation
+        .. autosummary::
 
-    Metrics:
-        summary()
-            Get summary of model performance metrics.
+           plot_parity
+           plot_residual_distribution
+           plot_residual_vs_predicted
+
+    GPR / probabilistic models (require predictive std σ)
+        .. autosummary::
+
+           plot_std_histogram
+           plot_parity_colored_by_std
+           plot_error_vs_std
+           plot_response_curves
+           plot_2d_response_surface
+           plot_reconstructed_parity
+
+    Metrics
+        .. autosummary::
+
+           summary
+           print_summary
 
     Example
     -------
+    >>> from sklearn.gaussian_process import GaussianProcessRegressor
     >>> from thermoift import MLPostprocessing
-    >>> from sklearn.ensemble import RandomForestRegressor
     >>>
-    >>> # Train model
-    >>> model = RandomForestRegressor()
-    >>> model.fit(X_train, y_train)
-    >>> y_pred = model.predict(X_test)
+    >>> gpr = GaussianProcessRegressor().fit(X_train, y_train)
+    >>> y_pred, y_std = gpr.predict(X_test, return_std=True)
     >>>
-    >>> # Initialize postprocessing
     >>> post = MLPostprocessing(
     ...     y_true=y_test,
     ...     y_pred=y_pred,
-    ...     target="gamma",
-    ...     feature_importances=model.feature_importances_,
-    ...     feature_names=features
+    ...     target="delta_gamma",
+    ...     feature_importances=1.0 / gpr.kernel_.k1.k2.length_scale,
+    ...     feature_names=features,
+    ...     datasets={
+    ...         "train": (y_train, gpr.predict(X_train)),
+    ...         "test":  (y_test,  y_pred),
+    ...     },
     ... )
     >>>
-    >>> # Generate plots
-    >>> post.plot_feature_importance(scale="linear", save_path="importance_linear")
-    >>> post.plot_feature_importance(scale="log", save_path="importance_log")
-    >>> post.plot_parity(save_path="parity_plot")
-    >>> post.plot_residual_distribution(save_path="residual_dist")
-    >>> post.plot_residual_vs_predicted(save_path="residual_vs_pred")
-    >>>
-    >>> # Get metrics
+    >>> post.plot_parity(save_path="parity", folder="OUTPUTS")
+    >>> post.plot_residual_distribution(save_path="residuals", folder="OUTPUTS")
+    >>> post.plot_error_vs_std(y_std, save_path="calibration", folder="OUTPUTS")
+    >>> post.plot_2d_response_surface(
+    ...     model=gpr, X_train=X_train, feature_names=features,
+    ...     save_path="surface_T_P", folder="OUTPUTS",
+    ... )
     >>> print(post.summary())
     """
 
@@ -177,20 +230,10 @@ class MLPostprocessing:
         datasets: Optional[dict] = None,
     ):
         """
-        Initialize MLPostprocessing with predictions and optional feature importances.
+        Initialise MLPostprocessing.
 
-        Parameters
-        ----------
-        datasets : dict, optional
-            Dictionary with train/test/val splits, e.g.::
-
-                {
-                    "train": (y_train, y_train_pred),
-                    "test":  (y_test,  y_test_pred),
-                    "val":   (y_val,   y_val_pred),
-                }
-
-            Used by ``plot_parity`` to show all splits on one plot.
+        See class docstring for full parameter descriptions.
+        Residuals, R², and RMSE are computed immediately on construction.
         """
         self.y_true = np.asarray(y_true)
         self.y_pred = np.asarray(y_pred)
@@ -223,25 +266,27 @@ class MLPostprocessing:
         return self._target
 
     def _get_target_label(self) -> str:
-        """Get LaTeX label for target variable."""
+        r"""Return the full LaTeX axis label for the active target, e.g. ``r"$\Delta\gamma$ / [mN m$^{-1}$]"``."""
         target_labels = {
             "gamma": r"$\gamma$ / [mN m$^{-1}$]",
+            "delta_gamma": r"$\Delta\gamma$ / [mN m$^{-1}$]",
             "p_dew": r"$P_{\mathrm{dew}}$ / [bar]",
             "p_bubble": r"$P_{\mathrm{bubble}}$ / [bar]",
         }
         return target_labels.get(self._target, self._target)
 
     def _get_target_symbol(self) -> str:
-        """Get LaTeX symbol for target variable."""
+        r"""Return the bare LaTeX math symbol for the active target, e.g. ``r"\Delta\gamma"``."""
         target_symbols = {
             "gamma": r"\gamma",
+            "delta_gamma": r"\Delta\gamma",
             "p_dew": r"P_{\mathrm{dew}}",
             "p_bubble": r"P_{\mathrm{bubble}}",
         }
         return target_symbols.get(self._target, self._target)
 
     def _get_feature_label(self, name: str) -> str:
-        """Get LaTeX label for feature name."""
+        """Return a LaTeX label for *name*, consulting ``label_map`` then ``ps.symbol_map``."""
         name_lower = name.lower()
         if name_lower in self._label_map:
             return self._label_map[name_lower]
@@ -257,16 +302,25 @@ class MLPostprocessing:
         folder: str = "PLOTS",
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
-        Plot feature importance as horizontal bar chart.
+        Horizontal bar chart of feature importances with percentage labels.
+
+        Bars are sorted from least to most important (bottom to top) so the
+        dominant feature is always at the top of the chart.  Percentage
+        contribution relative to the total importance sum is annotated on
+        each bar.
 
         Parameters
         ----------
-        scale : {"linear", "log"}, default "linear"
-            Scale for x-axis.
+        scale : {"linear", "log"}, default ``"linear"``
+            X-axis scale.  Use ``"log"`` when importances span several orders
+            of magnitude (e.g. normalised ARD inverse length-scales).
         color : str, optional
-            Bar color. Defaults to "red" for linear, "steelblue" for log.
+            Bar fill colour.  Defaults to ``"red"`` (linear) or
+            ``"steelblue"`` (log).
         save_path : str, optional
-            Base filename to save the figure.
+            Base filename passed to :func:`~thermoift.PLOT_SETTINGS.save_plot`.
+        folder : str, default ``"PLOTS"``
+            Output directory for the saved figure.
 
         Returns
         -------
@@ -276,7 +330,7 @@ class MLPostprocessing:
         Raises
         ------
         ValueError
-            If feature importances were not provided.
+            If ``feature_importances`` was not supplied at construction time.
         """
         if self._feature_importances is None:
             raise ValueError("Feature importances not provided during initialization.")
@@ -355,23 +409,27 @@ class MLPostprocessing:
         cv_rmse: Optional[float] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
-        Plot parity plot (actual vs predicted).
+        Actual vs predicted parity plot.
 
-        If ``datasets`` was provided during initialization, each split
-        (train / test / val) is plotted with distinct colors and its
-        own R² is shown in the legend.  Otherwise, a single scatter
-        of ``y_true`` vs ``y_pred`` is drawn.
+        When ``datasets`` was supplied at construction time, each split
+        (train / test / val) is drawn with a distinct colour and its own R²
+        appears in the legend.  Otherwise a single scatter of ``y_true`` vs
+        ``y_pred`` is drawn.  A perfect-prediction diagonal (``y = x``) is
+        always included.  Optional cross-validation scores can be annotated
+        in a text box.
 
         Parameters
         ----------
-        model_name : str, default "Model"
-            Name of the model for legend (used only when no datasets).
+        model_name : str, default ``"Model"``
+            Legend label used only in single-split mode (no ``datasets``).
         save_path : str, optional
-            Base filename to save the figure.
+            Base filename passed to :func:`~thermoift.PLOT_SETTINGS.save_plot`.
+        folder : str, default ``"PLOTS"``
+            Output directory for the saved figure.
         cv_r2 : float, optional
-            Mean R² from k-fold cross-validation to display on the plot.
+            Mean cross-validation R² to annotate in the lower-right corner.
         cv_rmse : float, optional
-            Mean RMSE from k-fold cross-validation to display on the plot.
+            Mean cross-validation RMSE to annotate alongside ``cv_r2``.
 
         Returns
         -------
@@ -481,18 +539,24 @@ class MLPostprocessing:
         cv_rmse: Optional[float] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
-        Plot histogram of residuals.
+        Histogram of signed residuals (y_true − y_pred).
+
+        A dashed zero-residual line is overlaid and a text box shows the mean,
+        standard deviation, and RMSE.  Optional cross-validation scores can be
+        appended to the annotation.
 
         Parameters
         ----------
         bins : int, default 40
             Number of histogram bins.
         save_path : str, optional
-            Base filename to save the figure.
+            Base filename passed to :func:`~thermoift.PLOT_SETTINGS.save_plot`.
+        folder : str, default ``"PLOTS"``
+            Output directory for the saved figure.
         cv_r2 : float, optional
-            Mean R² from k-fold cross-validation to display on the plot.
+            Mean cross-validation R² to append to the annotation box.
         cv_rmse : float, optional
-            Mean RMSE from k-fold cross-validation to display on the plot.
+            Mean cross-validation RMSE to append to the annotation box.
 
         Returns
         -------
@@ -574,16 +638,22 @@ class MLPostprocessing:
         cv_rmse: Optional[float] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
-        Plot residuals vs predicted values.
+        Scatter plot of residuals (y_true − y_pred) against predicted values.
+
+        Horizontal reference lines are drawn at zero and at ±RMSE to provide
+        a visual calibration band.  An optional cross-validation annotation
+        is placed in the upper-right corner.
 
         Parameters
         ----------
         save_path : str, optional
-            Base filename to save the figure.
+            Base filename passed to :func:`~thermoift.PLOT_SETTINGS.save_plot`.
+        folder : str, default ``"PLOTS"``
+            Output directory for the saved figure.
         cv_r2 : float, optional
-            Mean R² from k-fold cross-validation to display on the plot.
+            Mean cross-validation R² to annotate.
         cv_rmse : float, optional
-            Mean RMSE from k-fold cross-validation to display on the plot.
+            Mean cross-validation RMSE to annotate.
 
         Returns
         -------
@@ -656,20 +726,29 @@ class MLPostprocessing:
         folder: str = "PLOTS",
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
-        Plot histogram of GPR predictive standard deviation.
+        Histogram of GPR predictive standard deviations σ.
+
+        Useful for inspecting the spread of the model's uncertainty — a
+        narrow, low-σ distribution indicates high overall confidence; a
+        heavy right tail highlights extrapolation regions.  A text box
+        annotates mean, median, and maximum σ.
 
         Parameters
         ----------
-        y_std : array-like
-            Predictive standard deviations from ``model.predict(return_std=True)``.
+        y_std : array-like, shape (n_samples,)
+            Predictive standard deviations from
+            ``model.predict(X, return_std=True)``.
         bins : int, default 40
             Number of histogram bins.
         save_path : str, optional
-            Base filename to save the figure.
+            Base filename passed to :func:`~thermoift.PLOT_SETTINGS.save_plot`.
+        folder : str, default ``"PLOTS"``
+            Output directory for the saved figure.
 
         Returns
         -------
         Tuple[plt.Figure, plt.Axes]
+            Figure and axes objects.
         """
         y_std = np.asarray(y_std)
         fig, ax = ps.plot_init()
@@ -721,28 +800,33 @@ class MLPostprocessing:
         folder: str = "PLOTS",
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
-        Parity plot with points colored by predictive standard deviation.
+        Parity plot with each point coloured by its predictive standard deviation σ.
 
-        High-uncertainty predictions are immediately visible against the
-        perfect-prediction diagonal.
+        High-uncertainty predictions stand out immediately against the
+        perfect-prediction diagonal.  The colorbar uses the ``"Reds"`` palette
+        so larger σ values are darker.
 
         Parameters
         ----------
-        y_std : array-like
-            Predictive standard deviations (one per test sample).
+        y_std : array-like, shape (n_samples,)
+            Predictive standard deviations from
+            ``model.predict(X, return_std=True)``.
         save_path : str, optional
-            Base filename to save the figure.
+            Base filename passed to :func:`~thermoift.PLOT_SETTINGS.save_plot`.
+        folder : str, default ``"PLOTS"``
+            Output directory for the saved figure.
 
         Returns
         -------
         Tuple[plt.Figure, plt.Axes]
+            Figure and axes objects.
         """
         y_std = np.asarray(y_std)
         fig, ax = ps.plot_init()
 
         sc = ax.scatter(
             self.y_true, self.y_pred,
-            c=y_std, cmap="plasma",
+            c=y_std, cmap="Reds",
             alpha=0.85, s=20,
             linewidths=0.4, edgecolors="none",
         )
@@ -786,21 +870,26 @@ class MLPostprocessing:
         folder: str = "PLOTS",
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
-        Absolute error vs predictive standard deviation (calibration plot).
+        Uncertainty calibration plot: absolute error |ε| vs predictive std σ.
 
-        Well-calibrated GPRs should have most points below the
-        ``|ε| = σ`` diagonal and nearly all below ``|ε| = 2σ``.
+        A well-calibrated probabilistic model has most test points below the
+        ``|ε| = σ`` diagonal and nearly all below ``|ε| = 2σ``.  The
+        percentage of samples within each band is annotated in a text box.
 
         Parameters
         ----------
-        y_std : array-like
-            Predictive standard deviations (one per test sample).
+        y_std : array-like, shape (n_samples,)
+            Predictive standard deviations from
+            ``model.predict(X, return_std=True)``.
         save_path : str, optional
-            Base filename to save the figure.
+            Base filename passed to :func:`~thermoift.PLOT_SETTINGS.save_plot`.
+        folder : str, default ``"PLOTS"``
+            Output directory for the saved figure.
 
         Returns
         -------
         Tuple[plt.Figure, plt.Axes]
+            Figure and axes objects.
         """
         y_std = np.asarray(y_std)
         abs_error = np.abs(self.residuals)
@@ -1033,6 +1122,204 @@ class MLPostprocessing:
 
         return fig, axes_flat
 
+    def plot_2d_response_surface(
+        self,
+        model,
+        X_train: Union[np.ndarray, "pd.DataFrame"],
+        feature_names: List[str],
+        y_train: Optional[np.ndarray] = None,
+        T_name: str = "T",
+        P_name: str = "P",
+        n_grid: int = 80,
+        return_std: bool = False,
+        save_path: Optional[str] = None,
+        folder: str = "PLOTS",
+    ) -> Tuple[plt.Figure, np.ndarray]:
+        """
+        2D T–P response surface heatmap (all other features fixed at median).
+
+        Produces a side-by-side figure:
+        - **Left panel**: predicted mean coloured by ``RdBu_r`` with contour
+          lines and training-data scatter overlaid.
+        - **Right panel** (only when ``return_std=True``): predictive
+          standard deviation coloured by ``viridis``.
+
+        All features other than ``T_name`` and ``P_name`` are held fixed at
+        their column-wise training-set median.
+
+        Parameters
+        ----------
+        model : estimator
+            Fitted model with a ``predict(X, return_std=False)`` method.
+            If ``return_std=True`` the model must support
+            ``predict(X, return_std=True)``.
+        X_train : array-like, shape (n_samples, n_features)
+            Training data.  Used to derive sweep ranges (min/max per column)
+            and the median reference point; also scattered on the mean panel.
+        y_train : array-like, shape (n_samples,), optional
+            Training-set target values used to colour the scatter overlay.
+            When ``None`` the scatter is drawn with a neutral grey colour
+            (data-coverage indicator only).
+        feature_names : List[str]
+            Feature names in the same order as columns of ``X_train``.
+        T_name : str, default "T"
+            Name of the temperature feature.
+        P_name : str, default "P"
+            Name of the pressure feature.
+        n_grid : int, default 80
+            Number of grid points along each axis.
+        return_std : bool, default True
+            Whether to add a second panel showing predictive uncertainty.
+        save_path : str, optional
+            Base filename to save the figure.
+        folder : str, default "PLOTS"
+            Output folder.
+
+        Returns
+        -------
+        Tuple[plt.Figure, np.ndarray]
+            Figure and array of Axes.
+
+        Raises
+        ------
+        ValueError
+            If ``T_name`` or ``P_name`` are not found in ``feature_names``.
+        """
+        X_train_df = (
+            pd.DataFrame(X_train, columns=feature_names)
+            if not isinstance(X_train, pd.DataFrame)
+            else X_train.copy()
+        )
+
+        if T_name not in feature_names:
+            raise ValueError(f"T_name={T_name!r} not found in feature_names.")
+        if P_name not in feature_names:
+            raise ValueError(f"P_name={P_name!r} not found in feature_names.")
+
+        T_idx = feature_names.index(T_name)
+        P_idx = feature_names.index(P_name)
+
+        # Grid bounds from training data
+        T_vals = np.linspace(X_train_df[T_name].min(), X_train_df[T_name].max(), n_grid)
+        P_vals = np.linspace(X_train_df[P_name].min(), X_train_df[P_name].max(), n_grid)
+        TT, PP = np.meshgrid(T_vals, P_vals)  # shape (n_grid, n_grid)
+
+        # Reference row: column-wise median
+        X_ref = X_train_df.median().values.copy()
+
+        # Build full grid matrix (n_grid² × n_features)
+        X_grid = np.tile(X_ref, (n_grid * n_grid, 1))
+        X_grid[:, T_idx] = TT.ravel()
+        X_grid[:, P_idx] = PP.ravel()
+        X_grid_df = pd.DataFrame(X_grid, columns=feature_names)
+
+        # Predict
+        if return_std:
+            mean_flat, std_flat = model.predict(X_grid_df, return_std=True)
+            std_grid = std_flat.reshape(n_grid, n_grid)
+        else:
+            mean_flat = model.predict(X_grid_df)
+            std_grid = None
+        mean_grid = mean_flat.reshape(n_grid, n_grid)
+
+        target_label = self._get_target_label()
+        target_sym   = self._get_target_symbol()
+        unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
+
+        T_label = self._get_feature_label(T_name)
+        P_label = self._get_feature_label(P_name)
+
+        ncols = 2 if return_std else 1
+        fig, axes = ps.plot_init_multi(nrows=1, ncols=ncols, w=ncols * 5.0, h=4.0)
+        axes_flat = np.asarray(axes).ravel()
+        ax_mean = axes_flat[0]
+
+        # ── Mean panel ─────────────────────────────────────────────────────
+        cf_mean = ax_mean.contourf(
+            TT, PP, mean_grid,
+            levels=20, cmap="RdBu_r", alpha=0.92,
+        )
+        ax_mean.contour(
+            TT, PP, mean_grid,
+            levels=10,
+            colors="black", linewidths=0.4, alpha=0.35,
+        )
+
+        # Training scatter: coloured by y_train when provided, otherwise neutral
+        if y_train is not None:
+            ax_mean.scatter(
+                X_train_df[T_name], X_train_df[P_name],
+                c=np.asarray(y_train), cmap="RdBu_r",
+                vmin=mean_grid.min(), vmax=mean_grid.max(),
+                s=6, alpha=0.55, linewidths=0,
+                zorder=3,
+            )
+        else:
+            ax_mean.scatter(
+                X_train_df[T_name], X_train_df[P_name],
+                color="white", s=6, alpha=0.40, linewidths=0,
+                zorder=3,
+            )
+
+        cbar_mean = fig.colorbar(cf_mean, ax=ax_mean, pad=0.02)
+        cbar_mean.set_label(
+            rf"$\langle {target_sym} \rangle$ / {unit}",
+            fontsize=ps.label_fontsize * 0.8,
+        )
+        ps.style_colorbar(cbar_mean)
+
+        ax_mean.set_xlabel(T_label, fontsize=ps.label_fontsize * 0.9)
+        ax_mean.set_ylabel(P_label, fontsize=ps.label_fontsize * 0.9)
+        ax_mean.set_title(
+            rf"Mean {target_label} response",
+            fontsize=ps.title_fontsize * 0.75, fontweight="bold",
+        )
+        ps.apply_axis_style(ax_mean)
+        ax_mean.minorticks_on()
+        ax_mean.xaxis.set_minor_locator(AutoMinorLocator(2))
+        ax_mean.yaxis.set_minor_locator(AutoMinorLocator(2))
+        ax_mean.tick_params(axis="both", which="minor", length=3)
+
+        # ── Std panel (optional) ────────────────────────────────────────────
+        if return_std and std_grid is not None:
+            ax_std = axes_flat[1]
+            cf_std = ax_std.contourf(
+                TT, PP, std_grid,
+                levels=20, cmap="viridis", alpha=0.92,
+            )
+            ax_std.contour(
+                TT, PP, std_grid,
+                levels=10,
+                colors="white", linewidths=0.35, alpha=0.35,
+            )
+            ax_std.scatter(
+                X_train_df[T_name], X_train_df[P_name],
+                c="white", s=4, alpha=0.35, linewidths=0, zorder=3,
+            )
+            cbar_std = fig.colorbar(cf_std, ax=ax_std, pad=0.02)
+            cbar_std.set_label(
+                rf"$\sigma({target_sym})$ / {unit}",
+                fontsize=ps.label_fontsize * 0.8,
+            )
+            ps.style_colorbar(cbar_std)
+            ax_std.set_xlabel(T_label, fontsize=ps.label_fontsize * 0.9)
+            ax_std.set_ylabel(P_label, fontsize=ps.label_fontsize * 0.9)
+            ax_std.set_title(
+                "Predictive uncertainty",
+                fontsize=ps.title_fontsize * 0.75, fontweight="bold",
+            )
+            ps.apply_axis_style(ax_std)
+            ax_std.minorticks_on()
+            ax_std.xaxis.set_minor_locator(AutoMinorLocator(2))
+            ax_std.yaxis.set_minor_locator(AutoMinorLocator(2))
+            ax_std.tick_params(axis="both", which="minor", length=3)
+
+        plt.tight_layout()
+        if save_path:
+            ps.save_plot(fig, save_path, folder=folder)
+        plt.show()
+        return fig, axes_flat
+
     def plot_reconstructed_parity(
         self,
         datasets_reconstructed: dict,
@@ -1042,27 +1329,38 @@ class MLPostprocessing:
         folder: str = "PLOTS",
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
-        Parity plot of the reconstructed full target (γ_cDFT) with uncertainty.
+        Parity plot of the reconstructed full target (γ_cDFT) with uncertainty bars.
 
-        Shows all splits together; uncertainty is drawn as ±n_sigma error bars
-        on the test set only (or all sets if stds are provided for each).
+        All supplied splits are shown together.  When a 3-tuple
+        ``(y_true, y_pred, y_std)`` is provided for a split, ±n_sigma
+        error bars are drawn; otherwise plain scatter markers are used.
+        The model name is shown in the plot title.
 
         Parameters
         ----------
         datasets_reconstructed : dict
-            Each value is a 2- or 3-tuple ``(y_true, y_pred)`` or
-            ``(y_true, y_pred, y_std)``.  Supported keys:
-            ``"train"``, ``"test"``, ``"val"``.
+            Mapping of split name to a 2- or 3-tuple::
+
+                {
+                    "train": (y_true, y_pred),            # no error bars
+                    "test":  (y_true, y_pred, y_std),     # ±n_sigma bars
+                    "val":   (y_true, y_pred, y_std),     # optional
+                }
+
+            Supported keys: ``"train"``, ``"test"``, ``"val"``.
         n_sigma : float, default 2.0
-            Error bar half-width in units of σ.
-        model_name : str
-            Label prefix shown in the legend.
+            Half-width of error bars in units of σ.
+        model_name : str, default ``"GPR"``
+            Model identifier shown in the plot title.
         save_path : str, optional
-            Base filename to save the figure.
+            Base filename passed to :func:`~thermoift.PLOT_SETTINGS.save_plot`.
+        folder : str, default ``"PLOTS"``
+            Output directory for the saved figure.
 
         Returns
         -------
         Tuple[plt.Figure, plt.Axes]
+            Figure and axes objects.
         """
         fig, ax = ps.plot_init()
 
@@ -1122,9 +1420,12 @@ class MLPostprocessing:
         target_label = self._get_target_label()
         ax.set_xlabel(f"Actual {target_label}", fontsize=ps.label_fontsize * 0.9)
         ax.set_ylabel(f"Predicted {target_label}", fontsize=ps.label_fontsize * 0.9)
+        ax.set_title(
+            f"{model_name} — Reconstructed {target_label}",
+            fontsize=ps.title_fontsize * 0.75, fontweight="bold",
+        )
 
         # Annotation: error bar caption
-        unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
         ax.text(
             0.97, 0.03,
             rf"Error bars: $\pm {n_sigma:.0f}\sigma$",
@@ -1154,12 +1455,32 @@ class MLPostprocessing:
 
     def summary(self) -> dict:
         """
-        Get summary of model performance metrics.
+        Return a dictionary of performance metrics for the primary split.
+
+        Keys
+        ----
+        target : str
+            Target variable name.
+        n_samples : int
+            Number of samples in the primary split.
+        r2 : float
+            R² score.
+        rmse : float
+            Root-mean-squared error.
+        mae : float
+            Mean absolute error.
+        mean_residual : float
+            Mean signed residual (bias indicator).
+        std_residual : float
+            Standard deviation of residuals.
+        min_residual : float
+            Minimum residual.
+        max_residual : float
+            Maximum residual.
 
         Returns
         -------
         dict
-            Dictionary containing performance metrics.
         """
         return {
             "target": self._target,
@@ -1174,7 +1495,13 @@ class MLPostprocessing:
         }
 
     def print_summary(self) -> None:
-        """Print formatted summary of model performance."""
+        """
+        Print a formatted performance summary to stdout.
+
+        Displays R², RMSE, MAE, residual statistics, and — when
+        ``feature_importances`` was provided — a ranked bar chart of
+        feature contributions.
+        """
         s = self.summary()
         print("=" * 60)
         print(f"MODEL PERFORMANCE SUMMARY - {s['target'].upper()}")
