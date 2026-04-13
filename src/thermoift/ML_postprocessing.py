@@ -270,6 +270,7 @@ class MLPostprocessing:
         target_labels = {
             "gamma": r"$\gamma$ / [mN m$^{-1}$]",
             "delta_gamma": r"$\Delta\gamma$ / [mN m$^{-1}$]",
+            "residual": r"$\Delta\gamma$ / [mN m$^{-1}$]",
             "p_dew": r"$P_{\mathrm{dew}}$ / [bar]",
             "p_bubble": r"$P_{\mathrm{bubble}}$ / [bar]",
         }
@@ -280,18 +281,19 @@ class MLPostprocessing:
         target_symbols = {
             "gamma": r"\gamma",
             "delta_gamma": r"\Delta\gamma",
+            "residual": r"\Delta\gamma",
             "p_dew": r"P_{\mathrm{dew}}",
             "p_bubble": r"P_{\mathrm{bubble}}",
         }
         return target_symbols.get(self._target, self._target)
 
     def _get_feature_label(self, name: str) -> str:
-        """Return a LaTeX label for *name*, consulting ``label_map`` then ``ps.symbol_map``."""
+        """Return a LaTeX label for *name*, consulting ``label_map`` then ``ps.label_map``."""
         name_lower = name.lower()
         if name_lower in self._label_map:
             return self._label_map[name_lower]
-        if name_lower in ps.symbol_map:
-            return f"${ps.symbol_map[name_lower]}$"
+        if name_lower in ps.label_map:
+            return ps.label_map[name_lower]
         return name
 
     def plot_feature_importance(
@@ -537,6 +539,7 @@ class MLPostprocessing:
         folder: str = "PLOTS",
         cv_r2: Optional[float] = None,
         cv_rmse: Optional[float] = None,
+        title: Optional[str] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Histogram of signed residuals (y_true − y_pred).
@@ -581,12 +584,14 @@ class MLPostprocessing:
         std_resid = self.residuals.std()
 
         target_label = self._get_target_label()
-        ax.set_xlabel(f"Residual / {target_label.split('/')[-1].strip()}", fontsize=ps.label_fontsize * 0.9)
-        ax.set_ylabel(r"Count", fontsize=ps.label_fontsize * 0.9)
-        ax.set_title(r"Residual Distribution", fontsize=ps.title_fontsize * 0.75, fontweight="bold")
+        target_sym   = self._get_target_symbol()
+        unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
+        ax.set_xlabel(rf"Residual ${target_sym}$ / {unit}", fontsize=ps.label_fontsize * 0.9)
+        ax.set_ylabel("Count / [-]", fontsize=ps.label_fontsize * 0.9)
+        if title is not None:
+            ax.set_title(title, fontsize=ps.title_fontsize * 0.75, fontweight="bold")
 
         # Add statistics text box
-        unit = target_label.split('/')[-1].strip() if '/' in target_label else ""
         textstr = (
             f"Mean = {mean_resid:.2f} / {unit}\n"
             f"Std Dev = {std_resid:.2f} / {unit}\n"
@@ -636,6 +641,7 @@ class MLPostprocessing:
         folder: str = "PLOTS",
         cv_r2: Optional[float] = None,
         cv_rmse: Optional[float] = None,
+        title: Optional[str] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Scatter plot of residuals (y_true − y_pred) against predicted values.
@@ -672,6 +678,7 @@ class MLPostprocessing:
         )
 
         target_label = self._get_target_label()
+        target_sym   = self._get_target_symbol()
         unit = target_label.split('/')[-1].strip() if '/' in target_label else ""
 
         ax.axhline(0, color="black", linewidth=1.3, linestyle="--", label="Zero residual")
@@ -679,7 +686,9 @@ class MLPostprocessing:
                    label=rf"$\pm$RMSE = {self.rmse:.2f} / {unit}")
         ax.axhline(-self.rmse, color="blue", linewidth=1.1, linestyle="-.", alpha=0.85)
         ax.set_xlabel(f"Predicted {target_label}", fontsize=ps.label_fontsize * 0.9)
-        ax.set_ylabel(f"Residual / {unit}", fontsize=ps.label_fontsize * 0.9)
+        ax.set_ylabel(rf"Residual ${target_sym}$ / {unit}", fontsize=ps.label_fontsize * 0.9)
+        if title is not None:
+            ax.set_title(title, fontsize=ps.title_fontsize * 0.75, fontweight="bold")
 
         ps.apply_axis_style(ax)
         ps.style_legend(ax, fontsize=ps.label_fontsize * 0.5, loc="upper left")
@@ -724,6 +733,7 @@ class MLPostprocessing:
         bins: int = 40,
         save_path: Optional[str] = None,
         folder: str = "PLOTS",
+        title: Optional[str] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Histogram of GPR predictive standard deviations σ.
@@ -764,15 +774,15 @@ class MLPostprocessing:
 
         target_label = self._get_target_label()
         unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
-        ax.set_xlabel(rf"Predictive $\sigma$ / {unit}", fontsize=ps.label_fontsize * 0.9)
-        ax.set_ylabel("Count", fontsize=ps.label_fontsize * 0.9)
-        ax.set_title("GPR Predictive Uncertainty Distribution",
-                     fontsize=ps.title_fontsize * 0.75, fontweight="bold")
+        ax.set_xlabel(rf"$\sigma_{{\Delta\gamma}}$ / {unit}", fontsize=ps.label_fontsize * 0.9)
+        ax.set_ylabel("Count / [-]", fontsize=ps.label_fontsize * 0.9)
+        if title is not None:
+            ax.set_title(title, fontsize=ps.title_fontsize * 0.75, fontweight="bold")
 
         textstr = (
-            f"Mean = {y_std.mean():.4f}\n"
-            f"Median = {np.median(y_std):.4f}\n"
-            f"Max = {y_std.max():.4f}"
+            f"Mean = {y_std.mean():.2f} / {unit}\n"
+            f"Median = {np.median(y_std):.2f} / {unit}\n"
+            f"Max = {y_std.max():.2f} / {unit}"
         )
         ax.text(
             0.975, 0.9, textstr,
@@ -868,6 +878,7 @@ class MLPostprocessing:
         y_std: Union[np.ndarray, List],
         save_path: Optional[str] = None,
         folder: str = "PLOTS",
+        title: Optional[str] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Uncertainty calibration plot: absolute error |ε| vs predictive std σ.
@@ -913,11 +924,12 @@ class MLPostprocessing:
         ax.set_ylim(0, lim)
 
         target_label = self._get_target_label()
+        target_sym   = self._get_target_symbol()
         unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
-        ax.set_xlabel(rf"Predictive $\sigma$ / {unit}", fontsize=ps.label_fontsize * 0.9)
-        ax.set_ylabel(rf"$|\epsilon|$ / {unit}", fontsize=ps.label_fontsize * 0.9)
-        ax.set_title("Error vs Uncertainty Calibration",
-                     fontsize=ps.title_fontsize * 0.75, fontweight="bold")
+        ax.set_xlabel(rf"$\sigma_{{\Delta\gamma}}$ / {unit}", fontsize=ps.label_fontsize * 0.9)
+        ax.set_ylabel(rf"$|\Delta\gamma|$ / {unit}", fontsize=ps.label_fontsize * 0.9)
+        if title is not None:
+            ax.set_title(title, fontsize=ps.title_fontsize * 0.75, fontweight="bold")
 
         within_1s = np.mean(abs_error <= y_std) * 100
         within_2s = np.mean(abs_error <= 2 * y_std) * 100
@@ -953,6 +965,7 @@ class MLPostprocessing:
         save_individually: bool = False,
         save_path: Optional[str] = None,
         folder: str = "PLOTS",
+        title: Optional[str] = None,
     ) -> Tuple[plt.Figure, np.ndarray]:
         """
         One-at-a-time response curves: sweep each feature while holding
@@ -1026,12 +1039,13 @@ class MLPostprocessing:
             feat_label = self._get_feature_label(feat_name)
             handles = []
             if y_sigma is not None:
-                ax.fill_between(x_sweep, y_mean - 2 * y_sigma, y_mean + 2 * y_sigma,
-                                alpha=0.12, color=self.colors["hist_color"])
+                h_band2 = ax.fill_between(x_sweep, y_mean - 2 * y_sigma, y_mean + 2 * y_sigma,
+                                          alpha=0.12, color=self.colors["hist_color"])
                 h_band = ax.fill_between(x_sweep, y_mean - y_sigma, y_mean + y_sigma,
                                          alpha=0.25, color=self.colors["hist_color"])
                 if collect_handles:
                     handles.append((h_band, r"$\pm\sigma$"))
+                    handles.append((h_band2, r"$\pm 2\sigma$"))
             h_line, = ax.plot(x_sweep, y_mean, color=self.colors["edgecolor"], linewidth=1.5)
             h_ref = ax.axvline(ref_val, color="gray", linewidth=0.9, linestyle=":", alpha=0.7)
             if collect_handles:
@@ -1085,6 +1099,9 @@ class MLPostprocessing:
                 bbox_to_anchor=(0.5, -0.02),
             )
 
+        if title is not None:
+            fig.suptitle(title, fontsize=ps.title_fontsize * 0.8, fontweight="bold", y=1.01)
+
         plt.tight_layout(rect=[0, 0.04, 1, 1])
 
         if save_path and not save_individually:
@@ -1112,7 +1129,10 @@ class MLPostprocessing:
                     ]
                     if y_sigma is not None:
                         legend_elems.append(
-                            Patch(facecolor=self.colors["hist_color"], alpha=0.35, label=r"$\pm\sigma$")
+                            Patch(facecolor=self.colors["hist_color"], alpha=0.25, label=r"$\pm\sigma$")
+                        )
+                        legend_elems.append(
+                            Patch(facecolor=self.colors["hist_color"], alpha=0.12, label=r"$\pm 2\sigma$")
                         )
                     ax_i.legend(handles=legend_elems, fontsize=ps.label_fontsize * 0.6,
                                 edgecolor="black", framealpha=1.0, loc="best")
@@ -1134,6 +1154,7 @@ class MLPostprocessing:
         return_std: bool = False,
         save_path: Optional[str] = None,
         folder: str = "PLOTS",
+        title: Optional[str] = None,
     ) -> Tuple[plt.Figure, np.ndarray]:
         """
         2D T–P response surface heatmap (all other features fixed at median).
@@ -1235,14 +1256,20 @@ class MLPostprocessing:
         ax_mean = axes_flat[0]
 
         # ── Mean panel ─────────────────────────────────────────────────────
+        _vmin, _vmax = -5.0, 5.0
         cf_mean = ax_mean.contourf(
             TT, PP, mean_grid,
-            levels=20, cmap="RdBu_r", alpha=0.92,
+            levels=np.linspace(_vmin, _vmax, 21), cmap="RdBu_r", alpha=0.92,
+            vmin=_vmin, vmax=_vmax, extend="both",
         )
-        ax_mean.contour(
+        cs_mean = ax_mean.contour(
             TT, PP, mean_grid,
-            levels=10,
-            colors="black", linewidths=0.4, alpha=0.35,
+            levels=np.linspace(_vmin, _vmax, 11),
+            colors="black", linewidths=0.8, linestyles="solid",
+        )
+        ax_mean.clabel(
+            cs_mean, inline=True, fontsize=ps.label_fontsize * 0.65,
+            fmt="%.2g", inline_spacing=4,
         )
 
         # Training scatter: coloured by y_train when provided, otherwise neutral
@@ -1250,30 +1277,28 @@ class MLPostprocessing:
             ax_mean.scatter(
                 X_train_df[T_name], X_train_df[P_name],
                 c=np.asarray(y_train), cmap="RdBu_r",
-                vmin=mean_grid.min(), vmax=mean_grid.max(),
-                s=6, alpha=0.55, linewidths=0,
+                vmin=_vmin, vmax=_vmax,
+                s=22, alpha=0.85, linewidths=0.5, edgecolors="white",
                 zorder=3,
             )
         else:
             ax_mean.scatter(
                 X_train_df[T_name], X_train_df[P_name],
-                color="white", s=6, alpha=0.40, linewidths=0,
+                color="white", s=22, alpha=0.75, linewidths=0.5, edgecolors="grey",
                 zorder=3,
             )
 
         cbar_mean = fig.colorbar(cf_mean, ax=ax_mean, pad=0.02)
         cbar_mean.set_label(
             rf"$\langle {target_sym} \rangle$ / {unit}",
-            fontsize=ps.label_fontsize * 0.8,
+            fontsize=ps.label_fontsize,
         )
         ps.style_colorbar(cbar_mean)
 
-        ax_mean.set_xlabel(T_label, fontsize=ps.label_fontsize * 0.9)
-        ax_mean.set_ylabel(P_label, fontsize=ps.label_fontsize * 0.9)
-        ax_mean.set_title(
-            rf"Mean {target_label} response",
-            fontsize=ps.title_fontsize * 0.75, fontweight="bold",
-        )
+        ax_mean.set_xlabel(T_label, fontsize=ps.label_fontsize)
+        ax_mean.set_ylabel(P_label, fontsize=ps.label_fontsize)
+        if title is not None:
+            ax_mean.set_title(title, fontsize=ps.title_fontsize, fontweight="bold")
         ps.apply_axis_style(ax_mean)
         ax_mean.minorticks_on()
         ax_mean.xaxis.set_minor_locator(AutoMinorLocator(2))
@@ -1287,14 +1312,18 @@ class MLPostprocessing:
                 TT, PP, std_grid,
                 levels=20, cmap="viridis", alpha=0.92,
             )
-            ax_std.contour(
+            cs_std = ax_std.contour(
                 TT, PP, std_grid,
                 levels=10,
-                colors="white", linewidths=0.35, alpha=0.35,
+                colors="white", linewidths=0.8, linestyles="solid",
+            )
+            ax_std.clabel(
+                cs_std, inline=True, fontsize=ps.label_fontsize * 0.65,
+                fmt="%.2g", inline_spacing=4,
             )
             ax_std.scatter(
                 X_train_df[T_name], X_train_df[P_name],
-                c="white", s=4, alpha=0.35, linewidths=0, zorder=3,
+                c="white", s=22, alpha=0.75, linewidths=0.5, edgecolors="grey", zorder=3,
             )
             cbar_std = fig.colorbar(cf_std, ax=ax_std, pad=0.02)
             cbar_std.set_label(
@@ -1304,10 +1333,8 @@ class MLPostprocessing:
             ps.style_colorbar(cbar_std)
             ax_std.set_xlabel(T_label, fontsize=ps.label_fontsize * 0.9)
             ax_std.set_ylabel(P_label, fontsize=ps.label_fontsize * 0.9)
-            ax_std.set_title(
-                "Predictive uncertainty",
-                fontsize=ps.title_fontsize * 0.75, fontweight="bold",
-            )
+            if title is not None:
+                ax_std.set_title(title, fontsize=ps.title_fontsize * 0.75, fontweight="bold")
             ps.apply_axis_style(ax_std)
             ax_std.minorticks_on()
             ax_std.xaxis.set_minor_locator(AutoMinorLocator(2))
@@ -1327,6 +1354,7 @@ class MLPostprocessing:
         model_name: str = "GPR",
         save_path: Optional[str] = None,
         folder: str = "PLOTS",
+        title: Optional[str] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Parity plot of the reconstructed full target (γ_cDFT) with uncertainty bars.
@@ -1379,7 +1407,7 @@ class MLPostprocessing:
 
             colors = SPLIT_COLORS[key]
             r2 = r2_score(y_t, y_p)
-            label = rf"{split_labels[key]} ($R^2$ = {r2:.4f})"
+            label = rf"{split_labels[key]} ($R^2$ = {r2:.2f})"
 
             if y_s is not None:
                 ax.errorbar(
@@ -1418,12 +1446,12 @@ class MLPostprocessing:
         ax.set_ylim(lims)
 
         target_label = self._get_target_label()
-        ax.set_xlabel(f"Actual {target_label}", fontsize=ps.label_fontsize * 0.9)
-        ax.set_ylabel(f"Predicted {target_label}", fontsize=ps.label_fontsize * 0.9)
-        ax.set_title(
-            f"{model_name} — Reconstructed {target_label}",
-            fontsize=ps.title_fontsize * 0.75, fontweight="bold",
-        )
+        target_sym   = self._get_target_symbol()
+        unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
+        ax.set_xlabel(rf"Actual ${target_sym}$ / {unit}", fontsize=ps.label_fontsize * 0.9)
+        ax.set_ylabel(rf"Predicted ${target_sym}$ / {unit}", fontsize=ps.label_fontsize * 0.9)
+        if title is not None:
+            ax.set_title(title, fontsize=ps.title_fontsize * 0.75, fontweight="bold")
 
         # Annotation: error bar caption
         ax.text(
