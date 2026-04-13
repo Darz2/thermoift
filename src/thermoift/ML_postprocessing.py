@@ -182,6 +182,7 @@ class MLPostprocessing:
            plot_response_curves
            plot_2d_response_surface
            plot_reconstructed_parity
+           plot_parity_with_residual_distribution
 
     Metrics
         .. autosummary::
@@ -485,13 +486,13 @@ class MLPostprocessing:
             )
 
         # Perfect prediction line
-        ax.plot(lims, lims, "k--", linewidth=1.4, label="Perfect prediction")
+        ax.plot(lims, lims, "k--", linewidth=1.4)
         ax.set_xlim(lims)
         ax.set_ylim(lims)
 
         target_label = self._get_target_label()
-        ax.set_xlabel(f"Actual {target_label}", fontsize=ps.label_fontsize * 0.9)
-        ax.set_ylabel(f"Predicted {target_label}", fontsize=ps.label_fontsize * 0.9)
+        ax.set_xlabel(f"Actual {target_label}", fontsize=ps.label_fontsize)
+        ax.set_ylabel(f"Predicted {target_label}", fontsize=ps.label_fontsize)
 
         ps.apply_axis_style(ax)
 
@@ -586,8 +587,8 @@ class MLPostprocessing:
         target_label = self._get_target_label()
         target_sym   = self._get_target_symbol()
         unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
-        ax.set_xlabel(rf"Residual ${target_sym}$ / {unit}", fontsize=ps.label_fontsize * 0.9)
-        ax.set_ylabel("Count / [-]", fontsize=ps.label_fontsize * 0.9)
+        ax.set_xlabel(rf"Residual ${target_sym}$ / {unit}", fontsize=ps.label_fontsize)
+        ax.set_ylabel("Count / [-]", fontsize=ps.label_fontsize)
         if title is not None:
             ax.set_title(title, fontsize=ps.title_fontsize * 0.75, fontweight="bold")
 
@@ -685,8 +686,8 @@ class MLPostprocessing:
         ax.axhline(self.rmse, color="blue", linewidth=1.1, linestyle="-.", alpha=0.85,
                    label=rf"$\pm$RMSE = {self.rmse:.2f} / {unit}")
         ax.axhline(-self.rmse, color="blue", linewidth=1.1, linestyle="-.", alpha=0.85)
-        ax.set_xlabel(f"Predicted {target_label}", fontsize=ps.label_fontsize * 0.9)
-        ax.set_ylabel(rf"Residual ${target_sym}$ / {unit}", fontsize=ps.label_fontsize * 0.9)
+        ax.set_xlabel(f"Predicted {target_label}", fontsize=ps.label_fontsize)
+        ax.set_ylabel(rf"Residual ${target_sym}$ / {unit}", fontsize=ps.label_fontsize)
         if title is not None:
             ax.set_title(title, fontsize=ps.title_fontsize * 0.75, fontweight="bold")
 
@@ -774,8 +775,8 @@ class MLPostprocessing:
 
         target_label = self._get_target_label()
         unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
-        ax.set_xlabel(rf"$\sigma_{{\Delta\gamma}}$ / {unit}", fontsize=ps.label_fontsize * 0.9)
-        ax.set_ylabel("Count / [-]", fontsize=ps.label_fontsize * 0.9)
+        ax.set_xlabel(rf"$\sigma_{{\Delta\gamma}}$ / {unit}", fontsize=ps.label_fontsize)
+        ax.set_ylabel("Count / [-]", fontsize=ps.label_fontsize)
         if title is not None:
             ax.set_title(title, fontsize=ps.title_fontsize * 0.75, fontweight="bold")
 
@@ -851,13 +852,13 @@ class MLPostprocessing:
             min(self.y_true.min(), self.y_pred.min()) - 0.5,
             max(self.y_true.max(), self.y_pred.max()) + 0.5,
         ]
-        ax.plot(lims, lims, "k--", linewidth=1.4,
-                label=rf"Perfect prediction ($R^2$ = {self.r2:.4f})")
+        
+        ax.plot(lims, lims, "k--", linewidth=1.4)
         ax.set_xlim(lims)
         ax.set_ylim(lims)
 
-        ax.set_xlabel(f"Actual {target_label}", fontsize=ps.label_fontsize * 0.9)
-        ax.set_ylabel(f"Predicted {target_label}", fontsize=ps.label_fontsize * 0.9)
+        ax.set_xlabel(f"Actual {target_label}", fontsize=ps.label_fontsize)
+        ax.set_ylabel(f"Predicted {target_label}", fontsize=ps.label_fontsize)
 
         ps.apply_axis_style(ax)
         ax.legend(fontsize=ps.label_fontsize * 0.6, loc="upper left",
@@ -926,8 +927,8 @@ class MLPostprocessing:
         target_label = self._get_target_label()
         target_sym   = self._get_target_symbol()
         unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
-        ax.set_xlabel(rf"$\sigma_{{\Delta\gamma}}$ / {unit}", fontsize=ps.label_fontsize * 0.9)
-        ax.set_ylabel(rf"$|\Delta\gamma|$ / {unit}", fontsize=ps.label_fontsize * 0.9)
+        ax.set_xlabel(rf"$\sigma_{{\Delta\gamma}}$ / {unit}", fontsize=ps.label_fontsize)
+        ax.set_ylabel(rf"$|\Delta\gamma|$ / {unit}", fontsize=ps.label_fontsize)
         if title is not None:
             ax.set_title(title, fontsize=ps.title_fontsize * 0.75, fontweight="bold")
 
@@ -1256,7 +1257,8 @@ class MLPostprocessing:
         ax_mean = axes_flat[0]
 
         # ── Mean panel ─────────────────────────────────────────────────────
-        _vmin, _vmax = -5.0, 5.0
+        _abs_max = np.percentile(np.abs(mean_grid), 98)
+        _vmin, _vmax = -_abs_max, _abs_max
         cf_mean = ax_mean.contourf(
             TT, PP, mean_grid,
             levels=np.linspace(_vmin, _vmax, 21), cmap="RdBu_r", alpha=0.92,
@@ -1441,15 +1443,15 @@ class MLPostprocessing:
             min(all_true.min(), all_pred.min()) - margin,
             max(all_true.max(), all_pred.max()) + margin,
         ]
-        ax.plot(lims, lims, "k--", linewidth=1.4, label="Perfect prediction")
+        ax.plot(lims, lims, "k--", linewidth=1.4)
         ax.set_xlim(lims)
         ax.set_ylim(lims)
 
         target_label = self._get_target_label()
         target_sym   = self._get_target_symbol()
         unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
-        ax.set_xlabel(rf"Actual ${target_sym}$ / {unit}", fontsize=ps.label_fontsize * 0.9)
-        ax.set_ylabel(rf"Predicted ${target_sym}$ / {unit}", fontsize=ps.label_fontsize * 0.9)
+        ax.set_xlabel(rf"Actual ${target_sym}$ / {unit}", fontsize=ps.label_fontsize)
+        ax.set_ylabel(rf"Predicted ${target_sym}$ / {unit}", fontsize=ps.label_fontsize)
         if title is not None:
             ax.set_title(title, fontsize=ps.title_fontsize * 0.75, fontweight="bold")
 
@@ -1480,6 +1482,188 @@ class MLPostprocessing:
             ps.save_plot(fig, save_path, folder=folder)
         plt.show()
         return fig, ax
+
+    def plot_parity_with_residual_distribution(
+        self,
+        model_name: str = "GPR",
+        n_bins: int = 30,
+        title: Optional[str] = None,
+        save_path: Optional[str] = None,
+        folder: str = "PLOTS",
+    ) -> Tuple[plt.Figure, np.ndarray]:
+        """
+        Parity scatter (left) + horizontal residual histogram (right).
+
+        One figure, two side-by-side panels:
+
+        * **Left (wide)**: actual vs predicted parity scatter, coloured by
+          split (train / test / val) with per-split R² in the legend.
+        * **Right (narrow)**: horizontal histogram of signed residuals
+          ``y_true − y_pred`` per split.  Bars run left-to-right; the residual
+          value is on the y-axis with a dashed zero-line so symmetry is
+          immediately visible.
+
+        Parameters
+        ----------
+        model_name : str, default ``"GPR"``
+            Legend label used only in single-split mode (no ``datasets``).
+        n_bins : int, default ``30``
+            Number of histogram bins for the residual distribution.
+        title : str, optional
+            Figure suptitle.
+        save_path : str, optional
+            Base filename passed to :func:`~thermoift.PLOT_SETTINGS.save_plot`.
+        folder : str, default ``"PLOTS"``
+            Output directory for the saved figure.
+
+        Returns
+        -------
+        Tuple[plt.Figure, np.ndarray]
+            Figure and ``np.array([ax_scatter, ax_hist])``.
+        """
+        from matplotlib.gridspec import GridSpec
+
+        target_label = self._get_target_label()
+        target_sym   = self._get_target_symbol()
+        unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
+
+        split_labels = {"train": "Train", "test": "Test", "val": "Validation"}
+
+        # ── per-split data ──────────────────────────────────────────────────
+        if self._datasets is not None:
+            splits_data = {}
+            for key in ["train", "test", "val"]:
+                if key in self._datasets:
+                    y_t = np.asarray(self._datasets[key][0])
+                    y_p = np.asarray(self._datasets[key][1])
+                    splits_data[key] = (y_t, y_p, y_t - y_p)
+        else:
+            splits_data = {
+                "test": (self.y_true, self.y_pred, self.residuals)
+            }
+
+        all_true  = np.concatenate([v[0] for v in splits_data.values()])
+        all_pred  = np.concatenate([v[1] for v in splits_data.values()])
+        all_resid = np.concatenate([v[2] for v in splits_data.values()])
+
+        margin      = 0.5
+        parity_lims = [
+            min(all_true.min(), all_pred.min()) - margin,
+            max(all_true.max(), all_pred.max()) + margin,
+        ]
+        r_abs        = max(abs(all_resid.min()), abs(all_resid.max()))
+        resid_lims   = [-(r_abs * 1.15), r_abs * 1.15]
+
+        # ── figure ──────────────────────────────────────────────────────────
+        with plt.style.context(["ieee"]):
+            plt.rcParams["font.family"]      = ps.graphic_font
+            plt.rcParams["mathtext.fontset"] = ps.math_font
+            plt.rcParams["text.usetex"]      = True
+
+            fig = plt.figure(figsize=(5.5, 3.5), layout="constrained")
+            gs  = GridSpec(1, 2, width_ratios=[1.5, 1], wspace=0.08, figure=fig)
+            ax_scatter = fig.add_subplot(gs[0])
+            ax_hist    = fig.add_subplot(gs[1])
+
+        ps.apply_axis_style(ax_scatter)
+        ps.apply_axis_style(ax_hist)
+
+        # ── left: parity scatter ─────────────────────────────────────────────
+        for key, (y_t, y_p, _) in splits_data.items():
+            c   = SPLIT_COLORS[key]
+            r2  = r2_score(y_t, y_p)
+            lbl = rf"{split_labels[key]} ($R^2$={r2:.2f})"
+            ax_scatter.scatter(
+                y_t, y_p,
+                alpha=0.7, s=14,
+                facecolors=c["facecolor"],
+                edgecolors=c["edgecolor"],
+                linewidths=0.5,
+                label=lbl,
+            )
+
+        ax_scatter.plot(parity_lims, parity_lims, "k--", linewidth=1.2)
+        ax_scatter.set_xlim(parity_lims)
+        ax_scatter.set_ylim(parity_lims)
+        ax_scatter.set_xlabel(
+            rf"Actual ${target_sym}$ / {unit}",
+            fontsize=ps.label_fontsize * 0.85,
+        )
+        ax_scatter.set_ylabel(
+            rf"Predicted ${target_sym}$ / {unit}",
+            fontsize=ps.label_fontsize * 0.85,
+        )
+        ax_scatter.minorticks_on()
+        ax_scatter.xaxis.set_minor_locator(AutoMinorLocator(2))
+        ax_scatter.yaxis.set_minor_locator(AutoMinorLocator(2))
+        ax_scatter.legend(
+            fontsize=ps.legend_fontsize * 0.85,
+            loc="upper left",
+            edgecolor="black",
+            framealpha=1.0,
+        )
+
+        # ── right: horizontal residual histogram + KDE curve ─────────────────
+        from scipy.stats import gaussian_kde
+
+        for key, (_, _, resid) in splits_data.items():
+            c = SPLIT_COLORS[key]
+            counts, bin_edges, _ = ax_hist.hist(
+                resid,
+                bins=n_bins,
+                orientation="horizontal",
+                facecolor=c["facecolor"],
+                edgecolor=c["edgecolor"],
+                linewidth=0.4,
+                alpha=0.65,
+                label=split_labels[key],
+            )
+            # KDE scaled to match histogram counts
+            kde        = gaussian_kde(resid, bw_method=0.3)
+            y_grid     = np.linspace(-1.0, 1.0, 300)
+            kde_vals   = kde(y_grid)
+            bin_width  = bin_edges[1] - bin_edges[0]
+            kde_scaled = kde_vals * len(resid) * bin_width
+            ax_hist.plot(
+                kde_scaled, y_grid,
+                color=c["edgecolor"],
+                linewidth=1.2,
+                linestyle="-",
+                zorder=4,
+            )
+
+        ax_hist.axhline(0.0, color="k", linestyle="--", linewidth=0.8, zorder=3)
+        ax_hist.set_ylim([-1.0, 1.0])
+        ax_hist.set_xlim([0, 400])
+        ax_hist.set_xlabel("Count / [-]", fontsize=ps.label_fontsize * 0.75)
+        ax_hist.set_ylabel(
+            rf"Residual ${target_sym}$ / {unit}",
+            fontsize=ps.label_fontsize * 0.75,
+        )
+        ax_hist.yaxis.set_label_position("right")
+        ax_hist.minorticks_on()
+        ax_hist.xaxis.set_minor_locator(AutoMinorLocator(2))
+        ax_hist.yaxis.set_minor_locator(AutoMinorLocator(2))
+        ax_hist.tick_params(
+            axis="both", which="major", direction="in",
+            width=ps.tick_width, length=ps.tick_length,
+            bottom=True, top=True, left=True, right=True,
+        )
+        ax_hist.tick_params(
+            axis="both", which="minor", direction="in",
+            width=ps.minor_tick_width, length=ps.minor_tick_length,
+            bottom=True, top=True, left=True, right=True,
+        )
+        ax_hist.yaxis.set_tick_params(labelright=True, labelleft=False)
+
+        if title is not None:
+            fig.suptitle(title, fontsize=ps.title_fontsize * 0.75,
+                         fontweight="bold")
+
+        if save_path:
+            ps.save_plot(fig, save_path, folder=folder)
+        plt.show()
+        return fig, np.array([ax_scatter, ax_hist])
 
     def summary(self) -> dict:
         """
