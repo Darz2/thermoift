@@ -25,6 +25,7 @@ import json
 import matplotlib.pyplot as plt
 import os
 import re
+import math
 import pandas as pd
 import si_units as si
 from molmass import Formula
@@ -67,6 +68,22 @@ class RegistryManager:
     """
     _registry = None
     _kij_labels = None
+    _default_kij_labels = {
+        "carbon dioxide": "CO2",
+        "hydrogen": "H2",
+        "nitrogen": "N2",
+        "argon": "Ar",
+        "methane": "CH4",
+        "oxygen": "O2",
+        "carbon monoxide": "CO",
+        "hydrogen sulfide": "H2S",
+    }
+
+    @classmethod
+    def component_label(cls, component_name):
+        """Return the compact formula label for a registry component name."""
+        component_name = str(component_name).strip()
+        return cls._default_kij_labels.get(component_name.lower(), component_name)
 
     @classmethod
     def load_registry(cls, json_path=None):
@@ -105,8 +122,34 @@ class RegistryManager:
 
             if "mu" in p:
                 kwargs["mu"] = p["mu"]
-            if "association_sites" in p:
-                kwargs["association_sites"] = p["association_sites"]
+            if "q" in p:
+                kwargs["q"] = p["q"]
+
+            association_sites = p.get("association_sites")
+            if association_sites is None:
+                association_site = {
+                    key: p[source_key]
+                    for source_key, key in (
+                        ("na", "na"),
+                        ("nb", "nb"),
+                        ("kappa_ab", "kappa_ab"),
+                        ("epsilon_k_ab", "epsilon_k_ab"),
+                        ("epsilon_K_ab", "epsilon_k_ab"),
+                    )
+                    if source_key in p
+                }
+                association_sites = [association_site] if association_site else None
+            else:
+                association_sites = [
+                    {
+                        ("epsilon_k_ab" if key == "epsilon_K_ab" else key): value
+                        for key, value in site.items()
+                    }
+                    for site in association_sites
+                ]
+
+            if association_sites is not None:
+                kwargs["association_sites"] = association_sites
 
             registry[name] = feos.PureRecord(
                 feos.Identifier(
@@ -116,7 +159,13 @@ class RegistryManager:
                 ),
                 **kwargs,
             )
-            kij_labels_map[name] = p["kij_label"]
+            kij_label = p.get("kij_label", cls._default_kij_labels.get(name))
+            if kij_label is None:
+                raise KeyError(
+                    f"Missing 'kij_label' for component '{name}' in {json_path}. "
+                    "Add it to the parameter JSON or extend RegistryManager._default_kij_labels."
+                )
+            kij_labels_map[name] = kij_label
 
         cls._registry = registry
         cls._kij_labels = kij_labels_map
@@ -256,18 +305,9 @@ class RegistryManager:
             csv_columns = ['CO2', 'H2', 'Ar', 'N2', 'CH4', 'O2', 'CO', 'H2S']
 
         cls._ensure_loaded()
-        # Build mapping: abbreviation -> full name from registry
+        # Build mapping: abbreviation -> full name from the shared component labels.
         # CO2 -> carbon dioxide, H2 -> hydrogen, etc.
-        csv_to_full = {
-            'CO2': 'carbon dioxide',
-            'H2': 'hydrogen',
-            'Ar': 'argon',
-            'N2': 'nitrogen',
-            'CH4': 'methane',
-            'O2': 'oxygen',
-            'CO': 'carbon monoxide',
-            'H2S': 'hydrogen sulfide',
-        }
+        csv_to_full = {label: name for name, label in cls._default_kij_labels.items()}
 
         missing = [col for col in csv_columns if col not in csv_to_full]
         if missing:
@@ -1732,7 +1772,8 @@ class PlottingEngine:
         # Critical point
         Tc = feed_data["TC_K"]
         Pc = feed_data["PC_bar"]
-        z = feed_data["z"]
+        z_title = feed_data.get("active_z", feed_data["z"])
+        title_components = feed_data.get("active_components", comps)
 
         fig, ax = ps.plot_init()
 
@@ -1750,9 +1791,8 @@ class PlottingEngine:
         ax.set_ylabel(r'$P \; / \; [\mathrm{bar}]$', fontsize=ps.label_fontsize)
         ax.set_xlim(left=200)
 
-        z_str = ", ".join(f"{UtilityFunctions.latex_formula(c)}={val:g}"
-                         for c, val in zip(comps, z))
-        ax.set_title(f"{z_str}", fontsize=ps.label_fontsize)
+        z_str = UtilityFunctions.composition_title(title_components, z_title)
+        ax.set_title(f"{z_str}", fontsize=ps.label_fontsize/2)
         ax.minorticks_on()
 
         ps.style_legend(ax, loc='best', ncol=1, borderaxespad=1.0, frame=False)
@@ -1798,7 +1838,8 @@ class PlottingEngine:
 
         Tc = feed_data["TC_K"]
         Pc = feed_data["PC_bar"]
-        z = feed_data["z"]
+        z_title = feed_data.get("active_z", feed_data["z"])
+        title_components = feed_data.get("active_components", comps)
 
         # Extract interfacial tension data
         T_gamma, P_gamma, gamma_data = [], [], []
@@ -1891,8 +1932,7 @@ class PlottingEngine:
         ax.set_ylabel(r'$P \; / \; [\mathrm{bar}]$', fontsize=ps.label_fontsize)
         ps.style_legend(ax, fontsize=ps.legend_fontsize, loc='best', framealpha=0)
 
-        z_str = ", ".join(f"{UtilityFunctions.latex_formula(c)}={val:g}"
-                         for c, val in zip(comps, z))
+        z_str = UtilityFunctions.composition_title(title_components, z_title)
         ax.set_title(f"{z_str}", fontsize=ps.label_fontsize/2)
         ax.set_xlim(left=200)
         ax.minorticks_on()
@@ -1978,6 +2018,7 @@ class UtilityFunctions:
         Convert a chemical formula to LaTeX format.
 
         Example: 'CO2' -> 'CO$_2$'
+                 'carbon dioxide' -> 'CO$_2$'
                  'Ar'  -> 'Ar'
 
         Parameters
@@ -1990,7 +2031,31 @@ class UtilityFunctions:
         str
             LaTeX-formatted formula
         """
+        formula = RegistryManager.component_label(formula)
         return re.sub(r"(\d+)", r"$_{\1}$", formula)
+
+    @staticmethod
+    def format_mole_fraction(value, significant_digits=4, zero_tol=1e-15):
+        """
+        Format mole fractions for plot titles without hiding small nonzero values.
+        """
+        value = float(value)
+        if np.isclose(value, 0.0, atol=zero_tol, rtol=0.0):
+            return "0"
+        scale = 10 ** (significant_digits - 1 - math.floor(math.log10(abs(value))))
+        truncated = math.trunc(value * scale) / scale
+        return f"{truncated:.{significant_digits}g}"
+
+    @staticmethod
+    def composition_title(components, z, significant_digits=4, zero_tol=1e-15):
+        """
+        Build a compact composition title with dynamic mole-fraction precision.
+        """
+        return ", ".join(
+            f"{UtilityFunctions.latex_formula(component)}="
+            f"{UtilityFunctions.format_mole_fraction(value, significant_digits, zero_tol)}"
+            for component, value in zip(components, z)
+        )
 
     @staticmethod
     def get_random_generator(seed=None, rng_type="PCG64"):
@@ -2057,6 +2122,14 @@ def print_array2d(feeds, decimals=4):
 def components(parameters):
     """Backward compatibility wrapper."""
     return RegistryManager.get_component_names(parameters)
+
+def component_label(component_name):
+    """Backward compatibility wrapper."""
+    return RegistryManager.component_label(component_name)
+
+def map_csv_to_components(csv_columns=None):
+    """Backward compatibility wrapper."""
+    return RegistryManager.map_csv_to_components(csv_columns)
 
 def _kij_labels(component_names):
     """Backward compatibility wrapper for private function."""
@@ -2169,6 +2242,22 @@ def save_plot(fig, filename_base, folder="PLOTS"):
 def latex_formula(formula: str) -> str:
     """Backward compatibility wrapper."""
     return UtilityFunctions.latex_formula(formula)
+
+def format_mole_fraction(value, significant_digits=4, zero_tol=1e-15):
+    """Backward compatibility wrapper."""
+    return UtilityFunctions.format_mole_fraction(value, significant_digits, zero_tol)
+
+def composition_title(components, z, significant_digits=4, zero_tol=1e-15):
+    """Backward compatibility wrapper."""
+    return UtilityFunctions.composition_title(components, z, significant_digits, zero_tol)
+
+def get_random_generator(seed=None, rng_type="PCG64"):
+    """Backward compatibility wrapper."""
+    return UtilityFunctions.get_random_generator(seed, rng_type)
+
+def describe_available_rngs():
+    """Backward compatibility wrapper."""
+    return UtilityFunctions.describe_available_rngs()
 
 
 ############# Module Initialization #############
