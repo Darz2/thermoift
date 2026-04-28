@@ -47,7 +47,7 @@ class FeedsBuilder:
             self.templates = json.load(f)
         return self.templates
 
-    def random_impurity_split(self, n_impurities, total_impurity, n_samples, alpha=1.0):
+    def random_impurity_split(self, n_impurities, total_impurity, n_samples, alpha=1.0, rng=None):
         """Generate random impurity splits using Dirichlet distribution.
 
         Parameters
@@ -64,6 +64,8 @@ class FeedsBuilder:
             - alpha<1.0: samples concentrate near edges/corners (sparse)
             - alpha>1.0: samples concentrate near center (dense)
             Can be a single value (same for all) or array of length n_impurities.
+        rng : int or numpy.random.Generator, optional
+            Backward-compatible RNG override. If omitted, uses the builder RNG.
         """
         if n_impurities == 1:
             return np.full((n_samples, 1), total_impurity)
@@ -75,7 +77,11 @@ class FeedsBuilder:
             if len(alpha_vec) != n_impurities:
                 raise ValueError(f"alpha length {len(alpha_vec)} != n_impurities {n_impurities}")
 
-        samples = self.rng.dirichlet(alpha=alpha_vec, size=n_samples)
+        rng_obj = rng if isinstance(rng, np.random.Generator) else (
+            get_rng(rng, rng_type=self.rng_type) if rng is not None else self.rng
+        )
+
+        samples = rng_obj.dirichlet(alpha=alpha_vec, size=n_samples)
         return samples * total_impurity
 
     @staticmethod
@@ -387,6 +393,7 @@ class FeedsBuilder:
         co2_levels=(0.95, 0.96, 0.97, 0.98, 0.99),
         n_random_samples=100,
         alpha=1.0,
+        rng=None,
     ):
         """Generate random feed compositions with specified mixture sizes and CO2 levels.
 
@@ -408,6 +415,8 @@ class FeedsBuilder:
             - dict: {component_name: alpha_value} for per-component control
               e.g., {"H2": 0.5, "N2": 2.0, "CH4": 1.0}
               Components not in dict default to 1.0
+        rng : int or numpy.random.Generator, optional
+            Backward-compatible RNG override. Prefer passing seed to FeedsBuilder.
         """
         if co2_name not in components:
             raise ValueError(f"{co2_name} must be in components")
@@ -436,6 +445,7 @@ class FeedsBuilder:
                         total_impurity=total_impurity,
                         n_samples=n_random_samples,
                         alpha=alpha_vec,
+                        rng=rng,
                     )
 
                     for split in impurity_splits:

@@ -335,7 +335,7 @@ for comp, comp_tex in component_map.items():
 label_map = {k.lower(): v for k, v in label_map.items()}
 
 def label_to_symbol(label_str):
-    """
+    r"""
     Converts a label_map value to a clean sympy symbol string.
     e.g. r"$T_{\mathrm{c}}$ / [K]"  -  r"T_{\mathrm{c}}"
     """
