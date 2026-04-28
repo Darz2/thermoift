@@ -262,31 +262,13 @@ component_map = {
     "O2": r"\mathrm{O_2}",
     "Oxygen": r"\mathrm{O_2}",
 
-    "H2O": r"\mathrm{H_2O}",
-    "Water": r"\mathrm{H_2O}",
-
     "CO": r"\mathrm{CO}",
     "Carbon monoxide": r"\mathrm{CO}",
     "carbon_monoxide": r"\mathrm{CO}",
 
-    "NO2": r"\mathrm{NO_2}",
-    "Nitrogen dioxide": r"\mathrm{NO_2}",
-
-    "NO": r"\mathrm{NO}",
-    "Nitric oxide": r"\mathrm{NO}",
-
-    "SO2": r"\mathrm{SO_2}",
-    "Sulfur dioxide": r"\mathrm{SO_2}",
-
     "H2S": r"\mathrm{H_2S}",
     "Hydrogen sulfide": r"\mathrm{H_2S}",
     "Hydrogen_sulfide": r"\mathrm{H_2S}",
-
-    "C3H8": r"\mathrm{C_3H_8}",
-    "Propane": r"\mathrm{C_3H_8}",
-
-    "C2H6": r"\mathrm{C_2H_6}",
-    "Ethane": r"\mathrm{C_2H_6}",
 }
 
 def component_to_latex(name):
