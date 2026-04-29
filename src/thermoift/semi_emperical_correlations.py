@@ -277,16 +277,40 @@ class semi_emperical_correlations:
             return np.nan, np.nan, np.nan, Tc_K, Pc_bar, np.nan
 
         try:
-            interface   = feos.PlanarInterface.from_tanh(
-                vle     =vle,
-                n_grid  =n_grid,
-                l_grid  =l_grid * si.ANGSTROM,
+            interface = feos.PlanarInterface.from_tanh(
+                vle=vle,
+                n_grid=n_grid,
+                l_grid=l_grid * si.ANGSTROM,
                 critical_temperature=cp.temperature)
 
-            sol     = interface.solve()
-            gamma0  = float(sol.surface_tension * 1e3 / si.NEWTON * si.METER)
+            sol    = interface.solve()
+            gamma0 = float(sol.surface_tension * 1e3 / si.NEWTON * si.METER)
 
         except Exception as exc:
+            if not use_dynamic_l:
+                try:
+                    T_red        = T_K / Tc_K
+                    retry_scale  = min(max(1.0, (1.0 - T_red) ** (-0.5)), self._max_scale)
+                    retry_l_grid = self._l_grid * retry_scale
+                    retry_n_grid = int(self._n_grid * retry_scale)
+
+                    retry_interface = feos.PlanarInterface.from_tanh(
+                        vle=vle,
+                        n_grid=retry_n_grid,
+                        l_grid=retry_l_grid * si.ANGSTROM,
+                        critical_temperature=cp.temperature)
+
+                    sol    = retry_interface.solve()
+                    gamma0 = float(sol.surface_tension * 1e3 / si.NEWTON * si.METER)
+                    return gamma0, rhoL0, rhoV0, Tc_K, Pc_bar, Psat
+
+                except Exception as retry_exc:
+                    warnings.warn(
+                        f"cDFT solve failed for pure component '{component_name} (From semi_emperical_correlations)' "
+                        f"at T={T_K} K with base grid: {exc}. Dynamic-grid retry also failed: {retry_exc}"
+                    )
+                    return np.nan, rhoL0, rhoV0, Tc_K, Pc_bar, np.nan
+
             warnings.warn(
                 f"cDFT solve failed for pure component '{component_name} (From semi_emperical_correlations)' "
                 f"at T={T_K} K: {exc}"
