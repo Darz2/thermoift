@@ -419,6 +419,7 @@ class MLPostprocessing:
         folder: str = "PLOTS",
         cv_r2: Optional[float] = None,
         cv_rmse: Optional[float] = None,
+        cv_mae: Optional[float] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Actual vs predicted parity plot.
@@ -518,12 +519,14 @@ class MLPostprocessing:
         ax.tick_params(axis="both", which="minor", length=3)
 
         # Cross-validation annotation
-        if cv_r2 is not None or cv_rmse is not None:
+        if cv_r2 is not None or cv_rmse is not None or cv_mae is not None:
             cv_lines = []
             if cv_r2 is not None:
                 cv_lines.append(rf"CV $R^2$ = {cv_r2:.4f}")
             if cv_rmse is not None:
                 cv_lines.append(rf"CV RMSE = {cv_rmse:.4f}")
+            if cv_mae is not None:
+                cv_lines.append(rf"CV MAE = {cv_mae:.4f}")
             cv_text = "\n".join(cv_lines)
             ax.text(
                 0.95, 0.05, cv_text,
@@ -549,6 +552,7 @@ class MLPostprocessing:
         folder: str = "PLOTS",
         cv_r2: Optional[float] = None,
         cv_rmse: Optional[float] = None,
+        cv_mae: Optional[float] = None,
         title: Optional[str] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
@@ -611,6 +615,8 @@ class MLPostprocessing:
             textstr += f"\nCV $R^2$ = {cv_r2:.4f}"
         if cv_rmse is not None:
             textstr += f"\nCV RMSE = {cv_rmse:.4f}"
+        if cv_mae is not None:
+            textstr += f"\nCV MAE = {cv_mae:.4f}"
 
         ax.text(
             0.025, 0.9, textstr,
@@ -651,6 +657,7 @@ class MLPostprocessing:
         folder: str = "PLOTS",
         cv_r2: Optional[float] = None,
         cv_rmse: Optional[float] = None,
+        cv_mae: Optional[float] = None,
         title: Optional[str] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
@@ -709,12 +716,14 @@ class MLPostprocessing:
         ax.tick_params(axis="both", which="minor", length=3)
 
         # Cross-validation annotation
-        if cv_r2 is not None or cv_rmse is not None:
+        if cv_r2 is not None or cv_rmse is not None or cv_mae is not None:
             cv_lines = []
             if cv_r2 is not None:
                 cv_lines.append(rf"CV $R^2$ = {cv_r2:.4f}")
             if cv_rmse is not None:
                 cv_lines.append(rf"CV RMSE = {cv_rmse:.4f}")
+            if cv_mae is not None:
+                cv_lines.append(rf"CV MAE = {cv_mae:.4f}")
             cv_text = "\n".join(cv_lines)
             ax.text(
                 0.95, 0.95, cv_text,
