@@ -23,6 +23,8 @@ Supported targets
 -----------------
 ``"gamma"``
     Interfacial tension γ [mN m⁻¹].
+``"interfacial_thickness"``
+    Interfacial thickness L^{90}_{10} [nm].
 ``"delta_gamma"``
     Residual interfacial tension Δγ = γ_cDFT − γ_base [mN m⁻¹].
 ``"p_dew"``
@@ -62,7 +64,6 @@ import seaborn as sns
 
 from . import PLOT_SETTINGS as ps
 
-
 # Color scheme for different targets
 TARGET_COLORS = {
     "gamma": {
@@ -74,6 +75,11 @@ TARGET_COLORS = {
         "facecolor": "lightgreen",
         "edgecolor": "darkgreen",
         "hist_color": "green",
+    },
+    "interfacial_thickness": {
+        "facecolor": "#FDB863",
+        "edgecolor": "#B35806",
+        "hist_color": "#E66101",
     },
     "p_dew": {
         "facecolor": "#FF6B6B",
@@ -117,6 +123,7 @@ class MLPostprocessing:
         symbols.  Supported values:
 
         * ``"gamma"``       — interfacial tension γ [mN m⁻¹]
+        * ``"interfacial_thickness"`` — interfacial thickness L^{90}_{10} [nm]
         * ``"delta_gamma"`` — residual Δγ = γ_cDFT − γ_base [mN m⁻¹]
         * ``"p_dew"``       — dew-point pressure [bar]
         * ``"p_bubble"``    — bubble-point pressure [bar]
@@ -270,6 +277,7 @@ class MLPostprocessing:
         r"""Return the full LaTeX axis label for the active target, e.g. ``r"$\Delta\gamma$ / [mN m$^{-1}$]"``."""
         target_labels = {
             "gamma": r"$\gamma$ / [mN m$^{-1}$]",
+            "interfacial_thickness": r"$L^{90}_{10}$ / [nm]",
             "delta_gamma": r"$\Delta\gamma$ / [mN m$^{-1}$]",
             "residual": r"$\Delta\gamma$ / [mN m$^{-1}$]",
             "p_dew": r"$P_{\mathrm{dew}}$ / [bar]",
@@ -281,6 +289,7 @@ class MLPostprocessing:
         r"""Return the bare LaTeX math symbol for the active target, e.g. ``r"\Delta\gamma"``."""
         target_symbols = {
             "gamma": r"\gamma",
+            "interfacial_thickness": r"L^{90}_{10}",
             "delta_gamma": r"\Delta\gamma",
             "residual": r"\Delta\gamma",
             "p_dew": r"P_{\mathrm{dew}}",
@@ -774,8 +783,9 @@ class MLPostprocessing:
         )
 
         target_label = self._get_target_label()
+        target_sym = self._get_target_symbol()
         unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
-        ax.set_xlabel(rf"$\sigma_{{\Delta\gamma}}$ / {unit}", fontsize=ps.label_fontsize)
+        ax.set_xlabel(rf"$\sigma_{{{target_sym}}}$ / {unit}", fontsize=ps.label_fontsize)
         ax.set_ylabel("Count / [-]", fontsize=ps.label_fontsize)
         if title is not None:
             ax.set_title(title, fontsize=ps.title_fontsize * 0.75, fontweight="bold")
@@ -927,8 +937,8 @@ class MLPostprocessing:
         target_label = self._get_target_label()
         target_sym   = self._get_target_symbol()
         unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
-        ax.set_xlabel(rf"$\sigma_{{\Delta\gamma}}$ / {unit}", fontsize=ps.label_fontsize)
-        ax.set_ylabel(rf"$|\Delta\gamma|$ / {unit}", fontsize=ps.label_fontsize)
+        ax.set_xlabel(rf"$\sigma_{{{target_sym}}}$ / {unit}", fontsize=ps.label_fontsize)
+        ax.set_ylabel(rf"$|{target_sym}|$ / {unit}", fontsize=ps.label_fontsize)
         if title is not None:
             ax.set_title(title, fontsize=ps.title_fontsize * 0.75, fontweight="bold")
 

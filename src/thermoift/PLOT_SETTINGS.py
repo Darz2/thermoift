@@ -321,7 +321,7 @@ label_map = {
     "liquid_density": r"$\rho_{\mathrm{liq}}$ / [kg m$^{-3}$]",
     "vapor_density": r"$\rho_{\mathrm{vap}}$ / [kg m$^{-3}$]",
     "gamma": r"$\gamma$ / [mN m$^{-1}$]",
-    "interfacial_thickness": r"$L_{90-10}$ / [nm]",
+    "interfacial_thickness": r"$L^{90}_{10}$ / [nm]",
     "residual" : r"$\Delta \gamma$ / [mN m$^{-1}$]",
 }
 
