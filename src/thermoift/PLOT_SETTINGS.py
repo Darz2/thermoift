@@ -53,7 +53,7 @@ dual_colors = [
     ("#A6CEE3", "#1F78B4"),   # light blue (face, edge)
 ]
 
-graphic_font        = 'Arial'
+graphic_font        = 'sans-serif'
 math_font           = 'dejavuserif'  # ['dejavusans', 'dejavuserif', 'cm', 'stix', 'stixsans', 'custom']
 spine_width         = 1.5
 markersize          = 4
