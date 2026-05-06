@@ -1891,16 +1891,24 @@ class semi_emperical_correlations:
         result: dict[str, pd.DataFrame] = {}
         feed_z = np.asarray(feed_z, dtype=float)
 
-        # Build cDFT lookup DataFrame for direct merge (no interpolation).
-        # Both cDFT and SEC must use the same (T, P) grid — pass the same
-        # T_grid to compute_PT_colormap_data and to the cDFT sweep.
-        _cdft_df = None
+        # Build cDFT arrays for interpolation onto each SEC (T, P) grid.
+        _cdft_T = _cdft_P = _cdft_G = None
         if data_cdft is not None:
-            _cdft_df = pd.DataFrame({
-                "T": np.round(np.asarray(data_cdft["T"]), 10),
-                "P": np.round(np.asarray(data_cdft["P"]), 10),
-                "gamma_cDFT": np.asarray(data_cdft["gamma"]),
-            })
+            _cdft_T = np.asarray(data_cdft["T"], dtype=float)
+            _cdft_P = np.asarray(data_cdft["P"], dtype=float)
+            _cdft_G = np.asarray(data_cdft["gamma"], dtype=float)
+
+        def _interp_cdft(target_T: np.ndarray, target_P: np.ndarray) -> np.ndarray:
+            """Interpolate cDFT gamma onto arbitrary (T, P) points via griddata."""
+            points = np.column_stack([_cdft_T, _cdft_P])
+            result = griddata(points, _cdft_G, (target_T, target_P), method="cubic")
+            # Fill extrapolated NaNs with nearest-neighbour fallback
+            nan_mask = np.isnan(result)
+            if nan_mask.any():
+                result[nan_mask] = griddata(
+                    points, _cdft_G, (target_T[nan_mask], target_P[nan_mask]), method="nearest"
+                )
+            return result
 
         output_components = all_components if all_components is not None else component_names
         main_comp         = component_names[main_component_index]
@@ -2022,13 +2030,10 @@ class semi_emperical_correlations:
             df_para = df_raw_para[["T", "P", "gamma_mix"]].rename(
                 columns={"gamma_mix": "gamma_parachor"})
 
-        # Append cDFT - Parachor difference column (direct merge, same grid)
-        if _cdft_df is not None:
-            df_para["T"] = np.round(df_para["T"].values, 10)
-            df_para["P"] = np.round(df_para["P"].values, 10)
-            df_para = df_para.merge(_cdft_df, on=["T", "P"], how="left")
-            df_para["gamma_cDFT_minus_parachor"] = df_para["gamma_cDFT"] - df_para["gamma_parachor"]
-            df_para.drop(columns=["gamma_cDFT"], inplace=True)
+        # Append cDFT - Parachor difference column (interpolated onto parachor grid)
+        if _cdft_T is not None:
+            gamma_cdft_interp = _interp_cdft(df_para["T"].values, df_para["P"].values)
+            df_para["gamma_cDFT_minus_parachor"] = gamma_cdft_interp - df_para["gamma_parachor"].values
 
         df_para = df_para.sort_values("T").reset_index(drop=True)
         path = os.path.join(output_dir, f"{filename_parachor}.csv")
@@ -2087,13 +2092,12 @@ class semi_emperical_correlations:
             })
             df_wsd = df_wsd.merge(df_nc, on=["T", "P"], how="left")
 
-        # Append cDFT difference columns (direct merge, same grid)
-        if _cdft_df is not None:
-            df_wsd = df_wsd.merge(_cdft_df, on=["T", "P"], how="left")
-            df_wsd["gamma_cDFT_minus_wsd_corrected"] = df_wsd["gamma_cDFT"] - df_wsd["gamma_wsd"]
+        # Append cDFT difference columns (interpolated onto WSD grid)
+        if _cdft_T is not None:
+            gamma_cdft_interp = _interp_cdft(df_wsd["T"].values, df_wsd["P"].values)
+            df_wsd["gamma_cDFT_minus_wsd_corrected"] = gamma_cdft_interp - df_wsd["gamma_wsd"].values
             if "gamma_wsd_UC" in df_wsd.columns:
-                df_wsd["gamma_cDFT_minus_wsd_uncorrected"] = df_wsd["gamma_cDFT"] - df_wsd["gamma_wsd_UC"]
-            df_wsd.drop(columns=["gamma_cDFT"], inplace=True)
+                df_wsd["gamma_cDFT_minus_wsd_uncorrected"] = gamma_cdft_interp - df_wsd["gamma_wsd_UC"].values
 
         df_wsd = df_wsd.sort_values("T").reset_index(drop=True)
         path = os.path.join(output_dir, f"{filename_wsd}.csv")
