@@ -310,38 +310,41 @@ def format_z_latex(mixture, z):
     return r"$" + r",\ ".join(parts) + r"$"
 
 label_map = {
-    "temperature": r"$T$ / [K]",
-    "pressure": r"$P$ / [bar]",
-    "T": r"$T$ / [K]",
-    "P": r"$P$ / [bar]",
-    "Tc": r"$T_{\mathrm{c}}$ / [K]",
-    "Pc": r"$P_{\mathrm{c}}$ / [bar]",
-    "P_bubble": r"$P_{\mathrm{bubble}}$ / [bar]",
-    "P_dew": r"$P_{\mathrm{dew}}$ / [bar]",
-    "liquid_density": r"$\rho_{\mathrm{liq}}$ / [kg m$^{-3}$]",
-    "vapor_density": r"$\rho_{\mathrm{vap}}$ / [kg m$^{-3}$]",
-    "gamma": r"$\gamma$ / [mN m$^{-1}$]",
-    "interfacial_thickness": r"$L^{90}_{10}$ / [nm]",
-    "residual" : r"$\Delta \gamma$ / [mN m$^{-1}$]",
+    "temperature":           r"$T \, / \, [\mathrm{K}]$",
+    "pressure":              r"$P \, / \, [\mathrm{bar}]$",
+    "T":                     r"$T \, / \, [\mathrm{K}]$",
+    "P":                     r"$P \, / \, [\mathrm{bar}]$",
+    "Tc":                    r"$T_{\mathrm{c}} \, / \, [\mathrm{K}]$",
+    "Pc":                    r"$P_{\mathrm{c}} \, / \, [\mathrm{bar}]$",
+    "P_bubble":              r"$P_{\mathrm{bubble}} \, / \, [\mathrm{bar}]$",
+    "P_dew":                 r"$P_{\mathrm{dew}} \, / \, [\mathrm{bar}]$",
+    "liquid_density":        r"$\rho_{\mathrm{liq}} \, / \, [\mathrm{kg} \, \mathrm{m}^{-3}]$",
+    "vapor_density":         r"$\rho_{\mathrm{vap}} \, / \, [\mathrm{kg} \, \mathrm{m}^{-3}]$",
+    "gamma":                 r"$\gamma \, / \, [\mathrm{mN} \, \mathrm{m}^{-1}]$",
+    "interfacial_thickness": r"$L^{90}_{10} \, / \, [\mathrm{nm}]$",
+    "residual":              r"$\Delta \gamma \, / \, [\mathrm{mN} \, \mathrm{m}^{-1}]$",
 }
 
 for comp, comp_tex in component_map.items():
-    label_map[f"z_{comp}".lower()] = rf"$z_{{{comp_tex}}}$ / [mol mol$^{{-1}}$]"
-    label_map[f"x_{comp}".lower()] = rf"$x_{{{comp_tex}}}$ / [mol mol$^{{-1}}$]"
-    label_map[f"y_{comp}".lower()] = rf"$y_{{{comp_tex}}}$ / [mol mol$^{{-1}}$]"
-    label_map[f"E_{comp}".lower()] = rf"$E_{{{comp_tex}}}$ / [-]"
+    label_map[f"z_{comp}".lower()] = rf"$z_{{{comp_tex}}} \, / \, [\mathrm{{mol}} \, \mathrm{{mol}}^{{-1}}]$"
+    label_map[f"x_{comp}".lower()] = rf"$x_{{{comp_tex}}} \, / \, [\mathrm{{mol}} \, \mathrm{{mol}}^{{-1}}]$"
+    label_map[f"y_{comp}".lower()] = rf"$y_{{{comp_tex}}} \, / \, [\mathrm{{mol}} \, \mathrm{{mol}}^{{-1}}]$"
+    label_map[f"E_{comp}".lower()] = rf"$E_{{{comp_tex}}} \, / \, [-]$"
 
 # Lowercase
 label_map = {k.lower(): v for k, v in label_map.items()}
 
 def label_to_symbol(label_str):
     r"""
-    Converts a label_map value to a clean sympy symbol string.
-    e.g. r"$T_{\mathrm{c}}$ / [K]"  -  r"T_{\mathrm{c}}"
+    Converts a label_map value to just the variable symbol (no units).
+    e.g. r"$T_{\mathrm{c}} \, / \, [\mathrm{K}]$"  ->  r"T_{\mathrm{c}}"
     """
     match = re.match(r"\$(.*?)\$", label_str)
     if match:
-        return match.group(1)
+        content = match.group(1)
+        # Strip everything from the " / " (with optional \,) separator onward
+        part = re.split(r"\s*(?:\\,\s*)?/", content)[0].strip()
+        return part if part else content
     return label_str
 
 symbol_map = {k: label_to_symbol(v) for k, v in label_map.items()}

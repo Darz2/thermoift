@@ -393,7 +393,7 @@ class MLPreprocessing:
         bins: int = 40,
         color: str = "red",
         xlabel: Optional[str] = None,
-        ylabel: str = r"Count / [-]",
+        ylabel: str = r"$\mathrm{Count} \, / \, [-]$",
         title: Optional[str] = None,
         save_path: Optional[str] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
