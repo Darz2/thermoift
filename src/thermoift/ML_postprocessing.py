@@ -11,7 +11,7 @@ Classes
 MLPostprocessing
     Central class for model evaluation: feature importance, parity plots,
     residual diagnostics, GPR-specific uncertainty plots, 1-D response
-    curves, and 2-D T–P response surface heatmaps.
+    curves, and 2-D T-P response surface heatmaps.
 
 Functions
 ---------
@@ -22,12 +22,12 @@ print_model_metrics
 Supported targets
 -----------------
 ``"gamma"``
-    Interfacial tension γ [mN m⁻¹].
+    Interfacial tension gamma [mN m⁻¹].
 ``"interfacial_thickness"``
     Interfacial thickness L^{90}_{10} [nm].
 ``"delta_gamma"``
     Residual interfacial tension Δγ = γ_cDFT − γ_base [mN m⁻¹].
-``"p_dew"``
+``"p_dew``
     Dew-point pressure P_dew [bar].
 ``"p_bubble"``
     Bubble-point pressure P_bubble [bar].
@@ -276,12 +276,12 @@ class MLPostprocessing:
     def _get_target_label(self) -> str:
         r"""Return the full LaTeX axis label for the active target, e.g. ``r"$\Delta\gamma$ / [mN m$^{-1}$]"``."""
         target_labels = {
-            "gamma": r"$\gamma$ / [mN m$^{-1}$]",
-            "interfacial_thickness": r"$L^{90}_{10}$ / [nm]",
-            "delta_gamma": r"$\Delta\gamma$ / [mN m$^{-1}$]",
-            "residual": r"$\Delta\gamma$ / [mN m$^{-1}$]",
-            "p_dew": r"$P_{\mathrm{dew}}$ / [bar]",
-            "p_bubble": r"$P_{\mathrm{bubble}}$ / [bar]",
+            "gamma": r"$\gamma$ / $[\mathrm{mN\,m^{-1}}]$",
+            "interfacial_thickness": r"$L^{90}_{10}$ / $[\mathrm{nm}]$",
+            "delta_gamma": r"$\Delta\gamma$ / $[\mathrm{mN\,m^{-1}}]$",
+            "residual": r"$\Delta\gamma$ / $[\mathrm{mN\,m^{-1}}]$",
+            "p_dew": r"$P_{\mathrm{dew}}$ / $[\mathrm{bar}]$",
+            "p_bubble": r"$P_{\mathrm{bubble}}$ / $[\mathrm{bar}]$",
         }
         return target_labels.get(self._target, self._target)
 
@@ -454,7 +454,11 @@ class MLPostprocessing:
         if self._datasets is not None:
             # Collect all values for axis limits
             all_true, all_pred = [], []
-            split_labels = {"train": "Train", "test": "Test", "val": "Validation"}
+            split_labels = {
+                "train": r"$\mathrm{Train}$",
+                "test":  r"$\mathrm{Test}$",
+                "val":   r"$\mathrm{Validation}$",
+            }
 
             for key in ["train", "test", "val"]:
                 if key not in self._datasets:
@@ -501,16 +505,15 @@ class MLPostprocessing:
         ax.set_ylim(lims)
 
         target_label = self._get_target_label()
-        ax.set_xlabel(f"Actual {target_label}", fontsize=ps.label_fontsize)
-        ax.set_ylabel(f"Predicted {target_label}", fontsize=ps.label_fontsize)
+        ax.set_xlabel(rf"$\mathrm{{Actual}}$ {target_label}", fontsize=ps.label_fontsize)
+        ax.set_ylabel(rf"$\mathrm{{Predicted}}$ {target_label}", fontsize=ps.label_fontsize)
 
         ps.apply_axis_style(ax)
 
         ax.legend(
             fontsize=ps.label_fontsize * 0.65,
             loc="upper left",
-            edgecolor="black",
-            framealpha=1.0,
+            frameon=False,
         )
 
         ax.minorticks_on()
@@ -659,6 +662,7 @@ class MLPostprocessing:
         cv_rmse: Optional[float] = None,
         cv_mae: Optional[float] = None,
         title: Optional[str] = None,
+        y_range: Optional[Tuple[float, float]] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Scatter plot of residuals (y_true − y_pred) against predicted values.
@@ -688,32 +692,40 @@ class MLPostprocessing:
         ax.scatter(
             self.y_pred, self.residuals,
             alpha=0.8, s=20,
-            facecolors=self.colors["facecolor"],
-            edgecolors=self.colors["edgecolor"],
+            facecolors="lightblue",
+            edgecolors="darkblue",
             linewidths=0.6,
-            label="Residuals"
         )
 
         target_label = self._get_target_label()
         target_sym   = self._get_target_symbol()
         unit = target_label.split('/')[-1].strip() if '/' in target_label else ""
 
-        ax.axhline(0, color="black", linewidth=1.3, linestyle="--", label="Zero residual")
-        ax.axhline(self.rmse, color="blue", linewidth=1.1, linestyle="-.", alpha=0.85,
-                   label=rf"$\pm$RMSE = {self.rmse:.2f} / {unit}")
-        ax.axhline(-self.rmse, color="blue", linewidth=1.1, linestyle="-.", alpha=0.85)
-        ax.set_xlabel(f"Predicted {target_label}", fontsize=ps.label_fontsize)
-        ax.set_ylabel(rf"Residual ${target_sym}$ / {unit}", fontsize=ps.label_fontsize)
+        # strip outer [$...$] to get the bare LaTeX unit content for the legend
+        unit_inner = unit.strip("$")[1:-1] if (unit.startswith("$[") and unit.endswith("]$")) else unit
+        ax.axhline(0, color="black", linewidth=1.3, linestyle="--")
+        ax.axhline(self.rmse, color="red", linewidth=1.1, linestyle="-.", alpha=0.85,
+                   label=rf"$\pm\mathrm{{RMSE}} = {self.rmse:.2f}\,/\,[{unit_inner}]$")
+        ax.axhline(-self.rmse, color="red", linewidth=1.1, linestyle="-.", alpha=0.85)
+        ax.set_xlabel(rf"$\mathrm{{Predicted}}$ {target_label}", fontsize=ps.label_fontsize)
+        ax.set_ylabel(rf"$\mathrm{{Residual}}$ ${target_sym}$ / {unit}", fontsize=ps.label_fontsize)
         if title is not None:
             ax.set_title(title, fontsize=ps.title_fontsize * 0.75, fontweight="bold")
 
         ps.apply_axis_style(ax)
-        ps.style_legend(ax, fontsize=ps.label_fontsize * 0.5, loc="upper left")
+        ax.legend(
+            fontsize=ps.label_fontsize * 0.6,
+            loc="best",
+            frameon=False,
+        )
 
         ax.minorticks_on()
         ax.xaxis.set_minor_locator(AutoMinorLocator(2))
         ax.yaxis.set_minor_locator(AutoMinorLocator(2))
         ax.tick_params(axis="both", which="minor", length=3)
+
+        if y_range is not None:
+            ax.set_ylim(y_range)
 
         # Cross-validation annotation
         if cv_r2 is not None or cv_rmse is not None or cv_mae is not None:
