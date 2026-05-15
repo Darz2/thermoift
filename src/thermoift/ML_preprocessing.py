@@ -156,6 +156,7 @@ class MLPreprocessing:
     def plot_spearman_matrix(
         self,
         label_map: Optional[dict] = None,
+        extra_cols: Optional[List[str]] = None,
         save_path: Optional[str] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
@@ -166,6 +167,10 @@ class MLPreprocessing:
         label_map : dict, optional
             Mapping from column names to LaTeX labels.
             If None, uses symbol_map from PLOT_SETTINGS.
+        extra_cols : list of str, optional
+            Additional target/output columns to include in the matrix,
+            appended after features in the given order. If provided,
+            self._target is not automatically included.
         save_path : str, optional
             Base filename to save the figure (without extension).
 
@@ -175,7 +180,10 @@ class MLPreprocessing:
             Figure and axes objects.
         """
         # Build column list
-        numeric_cols = self._features + [self._target]
+        if extra_cols is not None:
+            numeric_cols = self._features + [c for c in extra_cols if c in self.df.columns]
+        else:
+            numeric_cols = self._features + [self._target]
 
         # Filter columns with more than one unique value
         numeric_cols = [col for col in numeric_cols if self.df[col].nunique() > 1]
@@ -185,14 +193,22 @@ class MLPreprocessing:
 
         # Apply label mapping (use symbol_map from PLOT_SETTINGS by default)
         if label_map is None:
-            label_map = {k: f"${v}$" for k, v in ps.symbol_map.items()}
+            raw_map = {k: f"${v}$" for k, v in ps.symbol_map.items()}
+            label_map = {}
+            for col in numeric_cols:
+                if col in raw_map:
+                    label_map[col] = raw_map[col]
+                elif col.lower() in raw_map:
+                    label_map[col] = raw_map[col.lower()]
         corr = corr.rename(index=label_map, columns=label_map)
 
         # Create upper triangle mask
         mask = np.triu(np.ones_like(corr, dtype=bool), k=1)
 
-        # Create figure using PLOT_SETTINGS
-        fig, ax = ps.plot_init()
+        # Scale figure to fit all squares + annotations
+        n = len(numeric_cols)
+        fig_size = max(4.0, n * 0.85)
+        fig, ax = ps.plot_init(w=fig_size, h=fig_size)
 
         # Plot heatmap with seaborn
         cm = sns.heatmap(
@@ -207,17 +223,31 @@ class MLPreprocessing:
             mask=mask,
             square=True,
             linewidths=0.5,
-            annot_kws={"size": 6},
-            cbar_kws={"shrink": 1.0}
+            annot_kws={"size": max(6, int(fig_size * 0.75))},
+            cbar_kws={"shrink": 1.0, "extend": "both"}
         )
 
         # Style colorbar
         cbar = cm.collections[0].colorbar
         ps.style_colorbar(cbar)
+        cbar.set_label(
+            r"Spearman $\rho_{\mathrm{s}}$ / $[-]$",
+            fontsize=ps.tick_labelsize,
+        )
+        cbar.outline.set_linewidth(0.5)
 
         # Apply axis style
         ps.apply_axis_style(ax)
-        ax.tick_params(axis="both", length=0)
+        ax.tick_params(
+            axis="x", which="both", direction="out",
+            length=ps.tick_length, width=ps.tick_width,
+            bottom=True, top=False, labelbottom=True, labeltop=False,
+        )
+        ax.tick_params(
+            axis="y", which="both", direction="out",
+            length=ps.tick_length, width=ps.tick_width,
+            left=True, right=False, labelleft=True, labelright=False,
+        )
 
         # Rotate labels
         ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
@@ -357,9 +387,10 @@ class MLPreprocessing:
             alpha=0.7
         )
 
-        cbar = plt.colorbar(sc, ax=ax)
+        cbar = plt.colorbar(sc, ax=ax, extend="both")
         cbar.set_label(cbar_label or self._get_label(color_by), fontsize=ps.label_fontsize)
         ps.style_colorbar(cbar)
+        cbar.outline.set_linewidth(0.75)
 
         ax.set_xlabel(xlabel or self._get_label(x), fontsize=ps.label_fontsize)
         ax.set_ylabel(ylabel or self._get_label(y), fontsize=ps.label_fontsize)
@@ -490,8 +521,8 @@ class MLPreprocessing:
         mins = [groups.get_group(x).min() for x in x_vals]
         maxs = [groups.get_group(x).max() for x in x_vals]
 
-        ax.plot(x_vals, means, color=color, linewidth=2)
-        ax.fill_between(x_vals, mins, maxs, alpha=0.2, color=color, label=r"min-max range")
+        ax.plot(x_vals, means, color=color, linewidth=2, label=r"$\gamma_{\mathrm{mean}}$")
+        ax.fill_between(x_vals, mins, maxs, alpha=0.2, color=color, label=r"$\gamma_{\mathrm{range}}$")
 
         ax.set_xlabel(xlabel or self._get_label(group_by), fontsize=ps.label_fontsize)
         ax.set_ylabel(ylabel or self._get_label(value_col), fontsize=ps.label_fontsize)
@@ -500,7 +531,9 @@ class MLPreprocessing:
             ax.set_title(title, fontsize=ps.title_fontsize, fontweight="bold")
 
         ps.apply_axis_style(ax)
-        ps.style_legend(ax, fontsize=max(getattr(ps, "legend_fontsize", 10), 10))
+        leg = ps.style_legend(ax, fontsize=max(getattr(ps, "legend_fontsize", 10), 10))
+        if leg:
+            leg.get_frame().set_visible(False)
         ax.minorticks_on()
         ax.xaxis.set_minor_locator(AutoMinorLocator(2))
         ax.yaxis.set_minor_locator(AutoMinorLocator(2))
@@ -516,6 +549,7 @@ class MLPreprocessing:
 
     def plot_target_vs_temperature(
         self,
+        title: Optional[str] = None,
         save_path: Optional[str] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """Plot target vs temperature colored by pressure."""
@@ -523,12 +557,13 @@ class MLPreprocessing:
             x="temperature",
             y=self._target,
             color_by="pressure",
-            title=rf"${ps.symbol_map.get(self._target, self._target)}$ vs $T$",
+            title=title,
             save_path=save_path,
         )
 
     def plot_target_vs_pressure(
         self,
+        title: Optional[str] = None,
         save_path: Optional[str] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """Plot target vs pressure colored by temperature."""
@@ -536,25 +571,27 @@ class MLPreprocessing:
             x="pressure",
             y=self._target,
             color_by="temperature",
-            title=rf"${ps.symbol_map.get(self._target, self._target)}$ vs $P$",
+            title=title,
             save_path=save_path,
         )
 
     def plot_target_distribution(
         self,
         bins: int = 40,
+        title: Optional[str] = None,
         save_path: Optional[str] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """Plot histogram of target distribution."""
         return self.plot_histogram(
             column=self._target,
             bins=bins,
-            title=rf"Distribution of ${ps.symbol_map.get(self._target, self._target)}$",
+            title=title,
             save_path=save_path,
         )
 
     def plot_target_vs_liquid_density(
         self,
+        title: Optional[str] = None,
         save_path: Optional[str] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """Plot target vs liquid density colored by temperature."""
@@ -562,12 +599,13 @@ class MLPreprocessing:
             x="liquid_density",
             y=self._target,
             color_by="temperature",
-            title=rf"${ps.symbol_map.get(self._target, self._target)}$ vs $\rho^{{\mathrm{{Liq}}}}$",
+            title=title,
             save_path=save_path,
         )
 
     def plot_target_vs_vapor_density(
         self,
+        title: Optional[str] = None,
         save_path: Optional[str] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """Plot target vs vapor density colored by temperature."""
@@ -575,12 +613,13 @@ class MLPreprocessing:
             x="vapor_density",
             y=self._target,
             color_by="temperature",
-            title=rf"${ps.symbol_map.get(self._target, self._target)}$ vs $\rho^{{\mathrm{{Vap}}}}$",
+            title=title,
             save_path=save_path,
         )
 
     def plot_target_vs_interfacial_thickness(
         self,
+        title: Optional[str] = None,
         save_path: Optional[str] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """Plot target vs interfacial thickness colored by temperature."""
@@ -588,18 +627,19 @@ class MLPreprocessing:
             x="interfacial_thickness",
             y=self._target,
             color_by="temperature",
-            title=rf"${ps.symbol_map.get(self._target, self._target)}$ vs $L_{{10}}^{{90}}$",
+            title=title,
             save_path=save_path,
         )
 
     def plot_target_phase_envelope(
         self,
+        title: Optional[str] = None,
         save_path: Optional[str] = None,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """Plot target along phase envelope (mean +/- range per temperature)."""
         return self.plot_phase_envelope(
             group_by="temperature",
             value_col=self._target,
-            title=rf"${ps.symbol_map.get(self._target, self._target)}$ along Phase Envelope",
+            title=title,
             save_path=save_path,
         )
