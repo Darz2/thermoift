@@ -1802,7 +1802,62 @@ class PlottingEngine:
         return fig, ax
 
     @staticmethod
-    def plot_interfacial_tension_map(PT_results, VLE_DFT, feed_key, parameters):
+    def _apply_ift_closure(T_gamma, P_gamma, gamma_data,
+                           T_bubble, P_bubble, T_dew, P_dew):
+        """Augment cDFT γ data with linear-closure boundary anchors.
+
+        For each isotherm with ≥2 cDFT pressure points, fits γ(P) = a + b·P
+        and evaluates the line at every envelope (T, P_bub) and (T, P_dew)
+        — using nearest-isotherm interpolation of (a, b) when an envelope T
+        falls between cDFT T values. This produces a dense ring of γ values
+        flush against both saturation curves, which (combined with finer
+        grid + linear interpolation in the caller) eliminates the white
+        slivers that appear between the contour fill and the envelope when
+        cDFT_NP is small.
+
+        Returns
+        -------
+        T_aug, P_aug, gamma_aug : list
+            Interior cDFT data plus boundary anchors.
+        """
+        # Per-isotherm linear fits γ(P) = a + b·P
+        from collections import defaultdict
+        by_T = defaultdict(list)
+        for T, P, g in zip(T_gamma, P_gamma, gamma_data):
+            by_T[float(T)].append((float(P), float(g)))
+
+        fits = {}  # T -> (a, b)
+        for T, pts in by_T.items():
+            if len(pts) >= 2:
+                Ps = np.array([p[0] for p in pts])
+                gs = np.array([p[1] for p in pts])
+                b, a = np.polyfit(Ps, gs, 1)
+                fits[T] = (float(a), float(b))
+
+        if not fits:
+            return list(T_gamma), list(P_gamma), list(gamma_data)
+
+        fit_T = np.array(sorted(fits))
+        fit_a = np.array([fits[T][0] for T in fit_T])
+        fit_b = np.array([fits[T][1] for T in fit_T])
+
+        def gamma_at(T, P):
+            a = float(np.interp(T, fit_T, fit_a))
+            b = float(np.interp(T, fit_T, fit_b))
+            return max(0.0, a + b * P)
+
+        T_aug = list(T_gamma); P_aug = list(P_gamma); g_aug = list(gamma_data)
+        for T, P in zip(T_bubble, P_bubble):
+            T_aug.append(float(T)); P_aug.append(float(P))
+            g_aug.append(gamma_at(float(T), float(P)))
+        for T, P in zip(T_dew, P_dew):
+            T_aug.append(float(T)); P_aug.append(float(P))
+            g_aug.append(gamma_at(float(T), float(P)))
+        return T_aug, P_aug, g_aug
+
+    @staticmethod
+    def plot_interfacial_tension_map(PT_results, VLE_DFT, feed_key, parameters,
+                                     enhanced=False):
         """
         Create a colormap plot of interfacial tension in PT space.
 
@@ -1816,6 +1871,13 @@ class PlottingEngine:
             Feed identifier
         parameters : feos.Parameters
             Parameters object
+        enhanced : bool, optional
+            When True, applies the linear γ(P) closure (boundary anchors at
+            every envelope T) and uses a 300×300 mesh with linear
+            interpolation. Eliminates white slivers between the contour fill
+            and the saturation curves when cDFT_NP is small. Requires at
+            least one isotherm with ≥2 cDFT pressure points. Default False
+            preserves the original cubic-on-100×100 behavior.
 
         Returns
         -------
@@ -1859,8 +1921,18 @@ class PlottingEngine:
         # Create figure
         fig, ax = ps.plot_init()
 
+        # Optional: linear-γ(P) closure with dense boundary anchors
+        if enhanced:
+            T_gamma, P_gamma, gamma_data = PlottingEngine._apply_ift_closure(
+                T_gamma, P_gamma, gamma_data,
+                T_bubble, P_bubble, T_dew, P_dew)
+            grid_size = 300
+            interp_method = 'linear'
+        else:
+            grid_size = 100
+            interp_method = 'cubic'
+
         # Grid generation
-        grid_size = 100
         T_grid = np.linspace(min(T_gamma), max(T_gamma), grid_size)
         P_grid = np.linspace(min(P_gamma), max(P_gamma), grid_size)
         T_mesh, P_mesh = np.meshgrid(T_grid, P_grid)
@@ -1870,9 +1942,10 @@ class PlottingEngine:
         P_gamma_aug = P_gamma + [Pc]
         gamma_aug = gamma_data + [0.0]
 
-        # Cubic interpolation with critical point anchor
+        # Interpolation with critical point anchor (linear when enhanced)
         gamma_mesh = griddata((T_gamma_aug, P_gamma_aug), gamma_aug,
-                             (T_mesh, P_mesh), method='cubic', fill_value=np.nan)
+                             (T_mesh, P_mesh), method=interp_method,
+                             fill_value=np.nan)
 
         # Nearest-neighbour fallback for any remaining NaN
         nan_mask = np.isnan(gamma_mesh)
@@ -1894,11 +1967,12 @@ class PlottingEngine:
         gamma_min = np.nanmin(gamma_masked)
         gamma_max = np.nanmax(gamma_masked)
 
-        # Isoline levels
-        levels_lines = [2*n + 1 for n in range(10)]
-        levels_lines = [lev for lev in levels_lines if gamma_min <= lev <= gamma_max]
+        # Isoline levels: odd integers (1, 3, 5, ..., 21), both drawn and labeled
+        levels_lines  = [2 * n + 1 for n in range(11)]
+        levels_lines  = [lev for lev in levels_lines if gamma_min <= lev <= gamma_max]
+        levels_labels = levels_lines
 
-        # Color bands
+        # Color bands (smooth 35-band gradient)
         levels = np.linspace(gamma_min, gamma_max, 35)
         contour = ax.contourf(T_mesh, P_mesh, gamma_masked, levels=levels,
                              cmap=plt.cm.Blues, extend='both')
@@ -1909,13 +1983,16 @@ class PlottingEngine:
         contour_lines = ax.contour(T_mesh, P_mesh, gamma_masked, levels=levels_lines,
                                    colors='black', linewidths=ps.linewidth/2, alpha=0.6)
 
-        ax.clabel(contour_lines, levels=levels_lines, inline=True,
-                 fontsize=ps.label_fontsize/2, fmt='%.0f',
+        ax.clabel(contour_lines, levels=levels_labels, inline=True,
+                 fontsize=ps.label_fontsize/2, fmt='$%d$',
                  inline_spacing=15, rightside_up=True)
 
-        # Colorbar legend
-        cbar = fig.colorbar(contour, ax=ax, pad=0.02, format='%.0f')
-        cbar.set_ticks(levels_lines)
+        # Colorbar legend (tick labels rendered in math mode to match axis style)
+        # Ticks at multiples of 5 only, independent of the iso-line set.
+        cbar_ticks = [lev for lev in [5 * (n + 1) for n in range(6)]
+                      if gamma_min <= lev <= gamma_max]
+        cbar = fig.colorbar(contour, ax=ax, pad=0.02, format='$%d$')
+        cbar.set_ticks(cbar_ticks)
         cbar.set_label(r'$\gamma \; / \; [\mathrm{mN \, m^{-1}}]$',
                       fontsize=ps.label_fontsize)
         cbar.ax.tick_params(labelsize=10)
@@ -1933,8 +2010,9 @@ class PlottingEngine:
         ps.style_legend(ax, fontsize=ps.legend_fontsize, loc='best', framealpha=0)
 
         z_str = UtilityFunctions.composition_title(title_components, z_title)
-        ax.set_title(f"{z_str}", fontsize=ps.label_fontsize/2)
-        ax.set_xlim(left=200)
+        # ax.set_title(f"{z_str}", fontsize=ps.label_fontsize/2)
+        ax.set_xlim(left=200, right=Tc * 1.05)
+        ax.set_ylim(bottom=0, top=Pc * 1.2)
         ax.minorticks_on()
 
         plt.tight_layout()
