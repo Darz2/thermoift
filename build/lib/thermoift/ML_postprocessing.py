@@ -760,12 +760,8 @@ class MLPostprocessing:
 
         if overlay_keys:
             band_styles = {
-                "test": "-.",
-                "val":  "-.",
-            }
-            band_label_short = {
-                "test": "Test",
-                "val":  "Val.",
+                "Test": "--",
+                "Val.": "--",
             }
 
             split_handles = []
@@ -828,7 +824,7 @@ class MLPostprocessing:
                         color=colors["edgecolor"],
                         linewidth=1.0,
                         linestyle=band_styles[key],
-                        label=rf"$\pm\mathrm{{RMSE}}_{{\mathrm{{{band_label_short[key]}}}}} = {rmse_k:.2f}\,/\,[{unit_inner}]$",
+                        label=rf"$\pm\mathrm{{RMSE}}_{{\mathrm{{{key}}}}} = {rmse_k:.2f}\,/\,[{unit_inner}]$",
                     )
                 )
 
