@@ -1640,7 +1640,7 @@ class MLPostprocessing:
         fig, ax = ps.plot_init()
 
         all_true, all_pred = [], []
-        split_labels = {"train": "Train", "test": "Test", "val": "Validation"}
+        split_labels = {"train": r"$\mathrm{Train}$", "test": r"$\mathrm{Test}$", "val": r"$\mathrm{Validation}$"}
 
         for key in ["train", "test", "val"]:
             if key not in datasets_reconstructed:
@@ -1654,7 +1654,7 @@ class MLPostprocessing:
 
             colors = SPLIT_COLORS[key]
             r2 = r2_score(y_t, y_p)
-            label = rf"{split_labels[key]} ($R^2$ = {r2:.2f})"
+            label = rf"{split_labels[key]} ($R^2 = {r2:.2f}$)"
 
             if y_s is not None:
                 ax.errorbar(
@@ -1695,27 +1695,27 @@ class MLPostprocessing:
         target_label = self._get_target_label()
         target_sym   = self._get_target_symbol()
         unit = target_label.split("/")[-1].strip() if "/" in target_label else ""
-        ax.set_xlabel(rf"Actual ${target_sym}$ / {unit}", fontsize=ps.label_fontsize)
-        ax.set_ylabel(rf"Predicted ${target_sym}$ / {unit}", fontsize=ps.label_fontsize)
+        ax.set_xlabel(rf"$\mathrm{{Actual}}\; {{\gamma}}$ / {unit}", fontsize=ps.label_fontsize)
+        ax.set_ylabel(rf"$\mathrm{{Predicted}}\;{{\gamma}}$ / {unit}", fontsize=ps.label_fontsize)
         if title is not None:
             ax.set_title(title, fontsize=ps.title_fontsize * 0.75, fontweight="bold")
 
         # Annotation: error bar caption
-        ax.text(
-            0.97, 0.03,
-            rf"Error bars: $\pm {n_sigma:.0f}\sigma$",
-            transform=ax.transAxes,
-            fontsize=ps.label_fontsize * 0.6,
-            ha="right", va="bottom",
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="black", alpha=0.85),
-        )
+        # ax.text(
+        #     0.97, 0.03,
+        #     rf"Error bars: $\pm {n_sigma:.0f}\sigma$",
+        #     transform=ax.transAxes,
+        #     fontsize=ps.label_fontsize * 0.6,
+        #     ha="right", va="bottom",
+        #     bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="black", alpha=0.85),
+        # )
 
         ps.apply_axis_style(ax)
         ax.legend(
             fontsize=ps.label_fontsize * 0.6,
             loc="upper left",
             edgecolor="black",
-            framealpha=1.0,
+            frameon=False,
         )
         ax.minorticks_on()
         ax.xaxis.set_minor_locator(AutoMinorLocator(2))
