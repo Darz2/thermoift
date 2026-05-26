@@ -2237,14 +2237,14 @@ class semi_emperical_correlations:
 
         fig, ax = ps.plot_init()
 
-        levels_fill = np.linspace(gamma_min, gamma_max, 35)
-        cf = ax.contourf(
+        cf = ax.pcolormesh(
             T_mesh,
             P_mesh,
             gamma_masked,
-            levels=levels_fill,
             cmap=plt.cm.Blues,
-            extend="both",
+            shading="auto",
+            vmin=gamma_min,
+            vmax=gamma_max,
         )
 
         inside_eroded = binary_erosion(inside, iterations=2)
@@ -2270,8 +2270,7 @@ class semi_emperical_correlations:
                 rightside_up=True,
             )
 
-        cbar = fig.colorbar(cf, ax=ax, pad=0.02, format="%.0f")
-        cbar.set_ticks(levels_lines)
+        cbar = fig.colorbar(cf, ax=ax, pad=0.02, format="%.0f", extend="both")
         cbar.set_label(
             r"$\gamma \; / \; [\mathrm{mN \, m^{-1}}]$",
             fontsize=ps.label_fontsize,
@@ -2311,13 +2310,6 @@ class semi_emperical_correlations:
         ax.set_ylabel(r"$P \; / \; [\mathrm{bar}]$", fontsize=ps.label_fontsize)
         ax.set_xlim(left=200)
         ax.minorticks_on()
-
-        comps = components(params)
-        z_str = ", ".join(
-            f"{latex_formula(c)}={v:g}" for c, v in zip(comps, np.asarray(feed_z))
-        )
-        suffix = f"  [{title_suffix}]" if title_suffix else ""
-        ax.set_title(f"{z_str}{suffix}", fontsize=ps.label_fontsize / 2)
 
         ps.style_legend(ax, fontsize=ps.legend_fontsize, loc="best", framealpha=0)
         plt.tight_layout()
@@ -2452,10 +2444,10 @@ class ColormapDifference:
 
         fig, ax = ps.plot_init()
 
-        levels_fill = np.linspace(-vlim, vlim, 35)
-        cf = ax.contourf(
+        cf = ax.pcolormesh(
             self.T_mesh, self.P_mesh, self.diff_masked,
-            levels=levels_fill, cmap="RdBu_r", extend="both",
+            cmap="RdBu_r", shading="auto",
+            vmin=-vlim, vmax=vlim,
         )
 
         levels_lines = [
@@ -2475,7 +2467,7 @@ class ColormapDifference:
                 inline_spacing=15, rightside_up=True,
             )
 
-        cbar = fig.colorbar(cf, ax=ax, pad=0.02, format="%.1f")
+        cbar = fig.colorbar(cf, ax=ax, pad=0.02, format="%.1f", extend="both")
         cbar.set_label(
             r"$\Delta\gamma \; / \; [\mathrm{mN \, m^{-1}}]$",
             fontsize=ps.label_fontsize,
@@ -2502,9 +2494,6 @@ class ColormapDifference:
         ax.set_xlim(left=200)
         ax.minorticks_on()
         ps.style_legend(ax, fontsize=ps.legend_fontsize, loc="best", framealpha=0)
-
-        if label:
-            ax.set_title(f"IFT Difference: {label}", fontsize=ps.label_fontsize)
 
         fig.tight_layout()
 

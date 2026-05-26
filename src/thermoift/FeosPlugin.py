@@ -1791,8 +1791,6 @@ class PlottingEngine:
         ax.set_ylabel(r'$P \; / \; [\mathrm{bar}]$', fontsize=ps.label_fontsize)
         ax.set_xlim(left=200)
 
-        z_str = UtilityFunctions.composition_title(title_components, z_title)
-        ax.set_title(f"{z_str}", fontsize=ps.label_fontsize/2)
         ax.minorticks_on()
 
         ps.style_legend(ax, loc='best', ncol=1, borderaxespad=1.0, frame=False)
@@ -1972,10 +1970,9 @@ class PlottingEngine:
         levels_lines  = [lev for lev in levels_lines if gamma_min <= lev <= gamma_max]
         levels_labels = levels_lines
 
-        # Color bands (smooth 35-band gradient)
-        levels = np.linspace(gamma_min, gamma_max, 35)
-        contour = ax.contourf(T_mesh, P_mesh, gamma_masked, levels=levels,
-                             cmap=plt.cm.Blues, extend='both')
+        contour = ax.pcolormesh(T_mesh, P_mesh, gamma_masked,
+                                cmap=plt.cm.Blues, shading='auto',
+                                vmin=gamma_min, vmax=gamma_max)
 
         # Contour lines
         inside_eroded = binary_erosion(inside, iterations=2)
@@ -1987,12 +1984,7 @@ class PlottingEngine:
                  fontsize=ps.label_fontsize/2, fmt='$%d$',
                  inline_spacing=15, rightside_up=True)
 
-        # Colorbar legend (tick labels rendered in math mode to match axis style)
-        # Ticks at multiples of 5 only, independent of the iso-line set.
-        cbar_ticks = [lev for lev in [5 * (n + 1) for n in range(6)]
-                      if gamma_min <= lev <= gamma_max]
-        cbar = fig.colorbar(contour, ax=ax, pad=0.02, format='$%d$')
-        cbar.set_ticks(cbar_ticks)
+        cbar = fig.colorbar(contour, ax=ax, pad=0.02, format='$%d$', extend='both')
         cbar.set_label(r'$\gamma \; / \; [\mathrm{mN \, m^{-1}}]$',
                       fontsize=ps.label_fontsize)
         cbar.ax.tick_params(labelsize=10)
