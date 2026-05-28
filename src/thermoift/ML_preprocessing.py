@@ -346,6 +346,8 @@ class MLPreprocessing:
         title: Optional[str] = None,
         hline: Optional[float] = None,
         hline_kwargs: Optional[dict] = None,
+        cmap: Optional[str] = None,
+        alpha: float = 0.7,
         save_path: Optional[str] = None,
         folder: str = "PLOTS",
     ) -> Tuple[plt.Figure, plt.Axes]:
@@ -367,6 +369,12 @@ class MLPreprocessing:
         hline_kwargs : dict, optional
             Extra keyword arguments forwarded to ``ax.axhline``.
             Defaults to ``{"color": "black", "linestyle": ":", "linewidth": 1.0}``.
+        cmap : str, optional
+            Colormap for the colour mapping. Defaults to ``PLOT_SETTINGS.map``
+            (``"coolwarm"``) when not given.
+        alpha : float, default 0.7
+            Marker opacity. Use a higher value (e.g. ``0.95``) for fully
+            saturated colours that match filled surface plots.
         save_path : str, optional
             Base filename to save the figure.
         folder : str, default "PLOTS"
@@ -382,9 +390,9 @@ class MLPreprocessing:
         sc = ax.scatter(
             self.df[x], self.df[y],
             c=self.df[color_by],
-            cmap=ps.map,
+            cmap=cmap or ps.map,
             s=15,
-            alpha=0.7
+            alpha=alpha
         )
 
         cbar = plt.colorbar(sc, ax=ax, extend="both")

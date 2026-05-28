@@ -475,7 +475,7 @@ class MLPostprocessing:
                     facecolors=colors["facecolor"],
                     edgecolors=colors["edgecolor"],
                     linewidths=0.6,
-                    label=rf"{split_labels[key]} ($R^2$ = {r2:.2f})",
+                    label=rf"{split_labels[key]} ($R^2 = {r2:.2f}$)",
                 )
 
             all_true = np.concatenate(all_true)
@@ -496,7 +496,7 @@ class MLPostprocessing:
                 facecolors=self.colors["facecolor"],
                 edgecolors=self.colors["edgecolor"],
                 linewidths=0.6,
-                label=rf"{model_name} ($R^2$ = {self.r2:.4f})",
+                label=rf"{model_name} ($R^2 = {self.r2:.4f}$)",
             )
 
         # Perfect prediction line
