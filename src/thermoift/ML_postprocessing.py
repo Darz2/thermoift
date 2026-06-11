@@ -745,6 +745,9 @@ class MLPostprocessing:
         legend_loc: Union[str, Tuple[float, float]] = "lower center",
         legend_handletextpad: float = 0.3,
         legend_handlelength: float = 1.0,
+        rmse_legend_loc: Union[str, Tuple[float, float]] = "upper left",
+        rmse_legend_handletextpad: float = 0.5,
+        rmse_legend_handlelength: float = 1.8,
         label_fontsize: Optional[float] = None,
         labelpad: Optional[float] = None,
         decimals: int = 2,
@@ -793,6 +796,14 @@ class MLPostprocessing:
         legend_handlelength : float, default 1.0
             Width of the marker-legend handle box; smaller values move the
             marker closer to the text.
+        rmse_legend_loc : str or (x, y) tuple, default ``"upper left"``
+            Location of the separate ±RMSE band legend.  Either a Matplotlib
+            ``loc`` string or a 2-tuple ``(x, y)`` giving the axes-fraction
+            coordinates of the legend's lower-left corner.
+        rmse_legend_handletextpad : float, default 0.5
+            Spacing between the line handle and its text in the ±RMSE legend.
+        rmse_legend_handlelength : float, default 1.8
+            Width of the ±RMSE legend handle box.
         label_fontsize : float, optional
             Font size of the x/y axis labels. Defaults to ``ps.label_fontsize``.
         labelpad : float, optional
@@ -994,11 +1005,11 @@ class MLPostprocessing:
             ax.legend(
                 handles=rmse_handles,
                 prop={"size": legend_fs * 0.9, "weight": legend_weight},
-                loc="upper left",
+                loc=rmse_legend_loc,
                 frameon=False,
                 ncol=1,
-                handlelength=1.8,
-                handletextpad=0.5,
+                handlelength=rmse_legend_handlelength,
+                handletextpad=rmse_legend_handletextpad,
             )
 
         else:
