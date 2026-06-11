@@ -420,6 +420,14 @@ class MLPostprocessing:
         cv_r2: Optional[float] = None,
         cv_rmse: Optional[float] = None,
         cv_mae: Optional[float] = None,
+        legend_fontsize: Optional[float] = None,
+        legend_bold: bool = True,
+        legend_loc: Union[str, Tuple[float, float]] = "upper left",
+        legend_handletextpad: float = 0.3,
+        legend_handlelength: float = 1.0,
+        label_fontsize: Optional[float] = None,
+        labelpad: Optional[float] = None,
+        decimals: int = 3,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Actual vs predicted parity plot.
@@ -443,6 +451,29 @@ class MLPostprocessing:
             Mean cross-validation R² to annotate in the lower-right corner.
         cv_rmse : float, optional
             Mean cross-validation RMSE to annotate alongside ``cv_r2``.
+        legend_fontsize : float, optional
+            Font size of the legend text. Defaults to ``ps.label_fontsize * 0.8``.
+        legend_bold : bool, default ``True``
+            If ``True``, render the legend labels in bold weight.  Under
+            ``text.usetex`` the labels are wrapped in ``\\boldmath\\bfseries``
+            so the math content (R², symbols) is bolded too.
+        legend_loc : str or (x, y) tuple, default ``"upper left"``
+            Legend location.  Either a Matplotlib ``loc`` string
+            (e.g. ``"upper left"``) or a 2-tuple ``(x, y)`` giving the
+            axes-fraction coordinates of the legend's lower-left corner,
+            e.g. ``(0.55, 0.1)``.
+        legend_handletextpad : float, default 0.3
+            Spacing between the legend marker and its text.
+        legend_handlelength : float, default 1.0
+            Width of the legend handle box; smaller values move the marker
+            closer to the text.
+        label_fontsize : float, optional
+            Font size of the x/y axis labels. Defaults to ``ps.label_fontsize``.
+        labelpad : float, optional
+            Padding (in points) between the axis and its x/y label. ``None``
+            uses the Matplotlib default (``axes.labelpad``).
+        decimals : int, default 3
+            Number of decimal places used for the R² values shown in the legend.
 
         Returns
         -------
@@ -451,13 +482,22 @@ class MLPostprocessing:
         """
         fig, ax = ps.plot_init()
 
+        legend_fs = legend_fontsize if legend_fontsize is not None else ps.label_fontsize * 0.8
+        label_fs = label_fontsize if label_fontsize is not None else ps.label_fontsize
+
+        def _bold_label(s: str) -> str:
+            # Under usetex, prop weight is ignored — wrap so math is bolded too.
+            if legend_bold and plt.rcParams.get("text.usetex", False):
+                return rf"{{\boldmath\bfseries {s}}}"
+            return s
+
         if self._datasets is not None:
             # Collect all values for axis limits
             all_true, all_pred = [], []
             split_labels = {
                 "train": r"$\mathrm{Train}$",
                 "test":  r"$\mathrm{Test}$",
-                "val":   r"$\mathrm{Validation}$",
+                "val":   r"$\mathrm{Val.}$",
             }
 
             for key in ["train", "test", "val"]:
@@ -475,7 +515,7 @@ class MLPostprocessing:
                     facecolors=colors["facecolor"],
                     edgecolors=colors["edgecolor"],
                     linewidths=0.6,
-                    label=rf"{split_labels[key]} ($R^2 = {r2:.2f}$)",
+                    label=_bold_label(rf"{split_labels[key]} ($R^2 = {r2:.{decimals}f}$)"),
                 )
 
             all_true = np.concatenate(all_true)
@@ -496,7 +536,7 @@ class MLPostprocessing:
                 facecolors=self.colors["facecolor"],
                 edgecolors=self.colors["edgecolor"],
                 linewidths=0.6,
-                label=rf"{model_name} ($R^2 = {self.r2:.4f}$)",
+                label=_bold_label(rf"{model_name} ($R^2 = {self.r2:.{decimals}f}$)"),
             )
 
         # Perfect prediction line
@@ -505,15 +545,20 @@ class MLPostprocessing:
         ax.set_ylim(lims)
 
         target_label = self._get_target_label()
-        ax.set_xlabel(rf"$\mathrm{{Actual}}$ {target_label}", fontsize=ps.label_fontsize)
-        ax.set_ylabel(rf"$\mathrm{{Predicted}}$ {target_label}", fontsize=ps.label_fontsize)
+        ax.set_xlabel(rf"$\mathrm{{Actual}}$ {target_label}", fontsize=label_fs, labelpad=labelpad)
+        ax.set_ylabel(rf"$\mathrm{{Predicted}}$ {target_label}", fontsize=label_fs, labelpad=labelpad)
 
         ps.apply_axis_style(ax)
 
         ax.legend(
-            fontsize=ps.label_fontsize * 0.65,
-            loc="upper left",
+            loc=legend_loc,
             frameon=False,
+            handletextpad=legend_handletextpad,
+            handlelength=legend_handlelength,
+            prop={
+                "size": legend_fs,
+                "weight": "bold" if legend_bold else "normal",
+            },
         )
 
         ax.minorticks_on()
@@ -695,6 +740,14 @@ class MLPostprocessing:
         cv_mae: Optional[float] = None,
         title: Optional[str] = None,
         y_range: Optional[Tuple[float, float]] = None,
+        legend_fontsize: Optional[float] = None,
+        legend_bold: bool = True,
+        legend_loc: Union[str, Tuple[float, float]] = "lower center",
+        legend_handletextpad: float = 0.3,
+        legend_handlelength: float = 1.0,
+        label_fontsize: Optional[float] = None,
+        labelpad: Optional[float] = None,
+        decimals: int = 2,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Scatter plot of residuals (y_true − y_pred) against predicted values.
@@ -724,6 +777,29 @@ class MLPostprocessing:
             Figure title.
         y_range : Tuple[float, float], optional
             Limits for the residual axis.
+        legend_fontsize : float, optional
+            Font size of the legend text. Defaults to ``ps.label_fontsize * 0.8``.
+        legend_bold : bool, default ``True``
+            If ``True``, render the legend labels in bold weight.  Under
+            ``text.usetex`` the labels are wrapped in ``\\boldmath\\bfseries``
+            so the math content (RMSE, symbols) is bolded too.
+        legend_loc : str or (x, y) tuple, default ``"lower center"``
+            Location of the Test/Validation marker legend.  Either a Matplotlib
+            ``loc`` string or a 2-tuple ``(x, y)`` giving the axes-fraction
+            coordinates of the legend's lower-left corner, e.g. ``(0.4, 0.05)``.
+            The separate ±RMSE legend stays at ``"upper left"``.
+        legend_handletextpad : float, default 0.3
+            Spacing between the marker and its text in the marker legend.
+        legend_handlelength : float, default 1.0
+            Width of the marker-legend handle box; smaller values move the
+            marker closer to the text.
+        label_fontsize : float, optional
+            Font size of the x/y axis labels. Defaults to ``ps.label_fontsize``.
+        labelpad : float, optional
+            Padding (in points) between the axis and its x/y label. ``None``
+            uses the Matplotlib default (``axes.labelpad``).
+        decimals : int, default 2
+            Number of decimal places used for the RMSE values shown in the legend.
 
         Returns
         -------
@@ -732,6 +808,16 @@ class MLPostprocessing:
         """
 
         fig, ax = ps.plot_init()
+
+        legend_fs = legend_fontsize if legend_fontsize is not None else ps.label_fontsize * 0.8
+        label_fs = label_fontsize if label_fontsize is not None else ps.label_fontsize
+        legend_weight = "bold" if legend_bold else "normal"
+
+        def _bold_label(s: str) -> str:
+            # Under usetex, prop weight is ignored — wrap so math is bolded too.
+            if legend_bold and plt.rcParams.get("text.usetex", False):
+                return rf"{{\boldmath\bfseries {s}}}"
+            return s
 
         target_label = self._get_target_label()
         target_sym   = self._get_target_symbol()
@@ -817,7 +903,7 @@ class MLPostprocessing:
                         markersize=6,
                         markerfacecolor=colors["facecolor"],
                         markeredgecolor=colors["edgecolor"],
-                        label=split_labels[key],
+                        label=_bold_label(split_labels[key]),
                     )
                 )
 
@@ -828,7 +914,7 @@ class MLPostprocessing:
                         color=colors["edgecolor"],
                         linewidth=1.0,
                         linestyle=band_styles[key],
-                        label=rf"$\pm\mathrm{{RMSE}}_{{\mathrm{{{band_label_short[key]}}}}} = {rmse_k:.2f}\,/\,[{unit_inner}]$",
+                        label=_bold_label(rf"$\pm\mathrm{{RMSE}}_{{\mathrm{{{band_label_short[key]}}}}} = {rmse_k:.{decimals}f}\,/\,[{unit_inner}]$"),
                     )
                 )
 
@@ -865,18 +951,20 @@ class MLPostprocessing:
                     color="red",
                     linewidth=1.1,
                     linestyle="-.",
-                    label=rf"$\pm\mathrm{{RMSE}} = {self.rmse:.2f}\,/\,[{unit_inner}]$",
+                    label=_bold_label(rf"$\pm\mathrm{{RMSE}} = {self.rmse:.{decimals}f}\,/\,[{unit_inner}]$"),
                 )
             ]
 
         ax.set_xlabel(
             rf"$\mathrm{{Predicted}}$ {target_label}",
-            fontsize=ps.label_fontsize
+            fontsize=label_fs,
+            labelpad=labelpad
         )
 
         ax.set_ylabel(
             rf"$\mathrm{{Residual}}$ ${target_sym}$ / {unit}",
-            fontsize=ps.label_fontsize
+            fontsize=label_fs,
+            labelpad=labelpad
         )
 
         if title is not None:
@@ -892,19 +980,20 @@ class MLPostprocessing:
             # Legend 1: Test / Validation, round markers, 2 columns
             split_legend = ax.legend(
                 handles=split_handles,
-                fontsize=ps.label_fontsize * 0.6,
-                loc="lower center",
+                prop={"size": legend_fs, "weight": legend_weight},
+                loc=legend_loc,
                 frameon=False,
                 ncol=2,
-                handletextpad=0.4,
+                handlelength=legend_handlelength,   # narrow the marker box (marker is centered in it)
+                handletextpad=legend_handletextpad, # tighten gap between marker and text
                 columnspacing=0.8,
             )
             ax.add_artist(split_legend)
 
-            # Legend 2: RMSE lines separately
+            # Legend 2: RMSE lines separately (kept slightly smaller than Legend 1)
             ax.legend(
                 handles=rmse_handles,
-                fontsize=ps.label_fontsize * 0.55,
+                prop={"size": legend_fs * 0.9, "weight": legend_weight},
                 loc="upper left",
                 frameon=False,
                 ncol=1,
@@ -915,7 +1004,7 @@ class MLPostprocessing:
         else:
             ax.legend(
                 handles=rmse_handles,
-                fontsize=ps.label_fontsize * 0.6,
+                prop={"size": legend_fs, "weight": legend_weight},
                 loc="best",
                 frameon=False,
             )
