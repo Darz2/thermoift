@@ -427,6 +427,8 @@ class MLPostprocessing:
         legend_handlelength: float = 1.0,
         label_fontsize: Optional[float] = None,
         labelpad: Optional[float] = None,
+        xtick_params: Optional[dict] = None,
+        ytick_params: Optional[dict] = None,
         decimals: int = 3,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
@@ -472,6 +474,15 @@ class MLPostprocessing:
         labelpad : float, optional
             Padding (in points) between the axis and its x/y label. ``None``
             uses the Matplotlib default (``axes.labelpad``).
+        xtick_params : dict, optional
+            Extra keyword arguments forwarded to ``ax.tick_params(axis="x", ...)``
+            after the shared style is applied, e.g.
+            ``{"labelsize": 16, "length": 6, "width": 1.0}``.  Lets the x ticks
+            be styled independently of the y ticks (overrides the global
+            ``PLOT_SETTINGS`` tick values for the x axis only).
+        ytick_params : dict, optional
+            As ``xtick_params`` but for the y axis
+            (``ax.tick_params(axis="y", ...)``).
         decimals : int, default 3
             Number of decimal places used for the R² values shown in the legend.
 
@@ -565,6 +576,12 @@ class MLPostprocessing:
         ax.xaxis.set_minor_locator(AutoMinorLocator(2))
         ax.yaxis.set_minor_locator(AutoMinorLocator(2))
         ax.tick_params(axis="both", which="minor", length=3)
+
+        # Per-axis tick overrides (style x and y ticks independently)
+        if xtick_params:
+            ax.tick_params(axis="x", **xtick_params)
+        if ytick_params:
+            ax.tick_params(axis="y", **ytick_params)
 
         # Cross-validation annotation
         if cv_r2 is not None or cv_rmse is not None or cv_mae is not None:
@@ -750,6 +767,8 @@ class MLPostprocessing:
         rmse_legend_handlelength: float = 1.8,
         label_fontsize: Optional[float] = None,
         labelpad: Optional[float] = None,
+        xtick_params: Optional[dict] = None,
+        ytick_params: Optional[dict] = None,
         decimals: int = 2,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
@@ -809,6 +828,15 @@ class MLPostprocessing:
         labelpad : float, optional
             Padding (in points) between the axis and its x/y label. ``None``
             uses the Matplotlib default (``axes.labelpad``).
+        xtick_params : dict, optional
+            Extra keyword arguments forwarded to ``ax.tick_params(axis="x", ...)``
+            after the shared style is applied, e.g.
+            ``{"labelsize": 16, "length": 6, "width": 1.0}``.  Lets the x ticks
+            be styled independently of the y ticks (overrides the global
+            ``PLOT_SETTINGS`` tick values for the x axis only).
+        ytick_params : dict, optional
+            As ``xtick_params`` but for the y axis
+            (``ax.tick_params(axis="y", ...)``).
         decimals : int, default 2
             Number of decimal places used for the RMSE values shown in the legend.
 
@@ -1024,6 +1052,12 @@ class MLPostprocessing:
         ax.xaxis.set_minor_locator(AutoMinorLocator(2))
         ax.yaxis.set_minor_locator(AutoMinorLocator(2))
         ax.tick_params(axis="both", which="minor", length=3)
+
+        # Per-axis tick overrides (style x and y ticks independently)
+        if xtick_params:
+            ax.tick_params(axis="x", **xtick_params)
+        if ytick_params:
+            ax.tick_params(axis="y", **ytick_params)
 
         if y_range is not None:
             ax.set_ylim(y_range)
