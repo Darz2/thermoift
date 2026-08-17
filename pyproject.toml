@@ -9,7 +9,7 @@ description = "Thermodynamics and Interfacial Tension tools for N-component mixt
 readme = "README.md"
 requires-python = ">=3.9"
 authors = [{ name = "Darshan Raju", email = "d.raju@tudelft.nl" }]
-license = { text = "Proprietary" }
+license = { text = "MIT" }
 keywords = ["thermodynamics", "interfacial-tension", "PC-SAFT", "feos", "mixtures", "Machine Learning", "Data Generation"]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -17,7 +17,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "License :: Other/Proprietary License",
+    "License :: OSI Approved :: MIT License",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Chemistry",
     "Topic :: Scientific/Engineering :: Physics",
@@ -40,8 +40,8 @@ dependencies = [
 test = ["pytest>=8", "pytest-cov>=5"]
 
 [project.urls]
-Homepage = "https://github.com/darshan-raju/thermoift"
-Repository = "https://github.com/darshan-raju/thermoift"
+Homepage = "https://github.com/Darz2/thermoift"
+Repository = "https://github.com/Darz2/thermoift"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
